@@ -97,5 +97,5 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
-NodeCodeSync/ProjectSettings/*.asset
-NodeCodeSync/Assets/Packages/
+NCSDevelopUnity/ProjectSettings/*.asset
+NCSDevelopUnity/Assets/Packages/

@@ -10,94 +10,118 @@ using UnityEngine.UIElements;
 namespace NodeCodeSync.Editor.ASTEditor
 {
     /// <summary>
-    /// AST ノードグラフの本体
-    /// ノード追加・ポート互換性を管理する最低限の実装
+    /// Represents the main GraphView for visualizing and editing the Abstract Syntax Tree (AST).
+    /// Provides functionality for converting between C# code and visual node structures.
     /// </summary>
     public class AstGraphView : GraphView
     {
+        /// <summary>
+        /// Occurs when the graph structure or node data is modified.
+        /// </summary>
         public event Action OnGraphDataChanged;
 
         public AstGraphView()
         {
             style.flexGrow = 1;
 
-            // マニピュレータ
+            // Initialize standard manipulators for navigation and interaction
             this.AddManipulator(new ContentZoomer());
             this.AddManipulator(new ContentDragger());
             this.AddManipulator(new SelectionDragger());
             this.AddManipulator(new RectangleSelector());
 
-            // グリッド背景
+            // Add grid background for visual clarity
             var grid = new GridBackground();
             Insert(0, grid);
             grid.StretchToParentSize();
 
+            // Subscribe to internal change events to sync with the EventBus
             OnGraphDataChanged += () =>
             {
-                NodeDataStartBus();
+                SyncGraphToCode();
             };
 
+            // Listen for external code updates to rebuild the graph
             NodeCodeDataEventBus.Instance.OnCodeUpdated += OnCodeUpdated;
         }
 
+        /// <summary>
+        /// Rebuilds the entire graph view based on the provided C# source code.
+        /// </summary>
+        /// <param name="code">The C# source code to visualize.</param>
         public void OnCodeUpdated(string code)
         {
+            // Clear existing elements
             DeleteElements(graphElements.ToList());
 
             var root = CodeToNodeConverter.CsharpToConvertedTree(code);
             if (root == null) return;
 
             var sb = new StringBuilder();
-            sb.AppendLine("[SB] === GraphView Start ===");
-            sb.AppendLine($"Root: {root.Self.Name}");
+            sb.AppendLine("[AstGraphView] Rebuilding graph from code...");
+            sb.AppendLine($"Root Node: {root.Self.Name}");
 
-            // Guid → AstNode 辞書
+            // Map to keep track of created nodes by their GUID for edge connection
             var guidMap = new Dictionary<string, AstNode>();
 
-            // 1パス目: DFSでAstNode生成
+            // Pass 1: Create nodes using Depth-First Search (DFS)
             CreateNodesRecursive(root, guidMap, Vector2.zero, 0);
-            sb.AppendLine($"Pass1: {guidMap.Count} nodes created");
+            sb.AppendLine($"Pass 1: {guidMap.Count} nodes created.");
 
-            // 2パス目: FieldChildrenでEdge接続
+            // Pass 2: Connect nodes based on field relationships
             ConnectEdgesRecursive(root, guidMap, sb);
-            sb.AppendLine("[SB] === GraphView End ===");
+            sb.AppendLine("[AstGraphView] Graph rebuild complete.");
 
             Debug.Log(sb.ToString());
         }
 
-        void CreateNodesRecursive(ConvertedNode converted, Dictionary<string, AstNode> guidMap, Vector2 basePos, int depth)
+        /// <summary>
+        /// Recursively creates AstNode instances from converted node data.
+        /// </summary>
+        private void CreateNodesRecursive(ConvertedNode converted, Dictionary<string, AstNode> guidMap, Vector2 basePos, int depth)
         {
             var node = new AstNode(converted.Self);
+
+            // Basic auto-layout logic (can be replaced by a more sophisticated layout engine)
             var pos = basePos + new Vector2(depth * 350, guidMap.Count * 120);
             node.SetPosition(new Rect(pos, new Vector2(300, 200)));
             AddElement(node);
 
             guidMap[converted.Self.Guid] = node;
 
-            void changeHandler()
-            {
-                OnGraphDataChanged?.Invoke();
-            }
+            // Handle data changes within the node
+            Action changeHandler = () => OnGraphDataChanged?.Invoke();
             node.OnNodeDataChanged += changeHandler;
 
-            // 子を再帰
+            // Ensure cleanup when node is removed
+            node.RegisterCallback<DetachFromPanelEvent>(_ =>
+            {
+                node.OnNodeDataChanged -= changeHandler;
+            });
+
+            // Process children recursively
             if (converted.FieldChildren != null)
             {
                 foreach (var kvp in converted.FieldChildren)
                 {
                     foreach (var child in kvp.Value)
+                    {
                         CreateNodesRecursive(child, guidMap, basePos, depth + 1);
+                    }
                 }
             }
         }
 
-        void ConnectEdgesRecursive(ConvertedNode converted, Dictionary<string, AstNode> guidMap, StringBuilder sb)
+        /// <summary>
+        /// Recursively establishes edges between parent ports and child nodes.
+        /// </summary>
+        private void ConnectEdgesRecursive(ConvertedNode converted, Dictionary<string, AstNode> guidMap, StringBuilder sb)
         {
             if (converted.FieldChildren == null) return;
 
             if (!guidMap.TryGetValue(converted.Self.Guid, out var parentNode))
             {
-                sb.AppendLine($"⚠ parent not found: {converted.Self.Name} ({converted.Self.Guid[..8]})");
+                sb.AppendLine($"[Warning] Parent node not found in map: {converted.Self.Name} ({converted.Self.Guid.Substring(0, 8)})");
                 return;
             }
 
@@ -105,9 +129,10 @@ namespace NodeCodeSync.Editor.ASTEditor
             {
                 var fieldName = kvp.Key;
                 var outputPort = parentNode.GetOutputPort(fieldName);
+
                 if (outputPort == null)
                 {
-                    sb.AppendLine($"⚠ port not found: {converted.Self.Name}.{fieldName}");
+                    sb.AppendLine($"[Warning] Output port not found: {converted.Self.Name}.{fieldName}");
                     continue;
                 }
 
@@ -115,27 +140,31 @@ namespace NodeCodeSync.Editor.ASTEditor
                 {
                     if (!guidMap.TryGetValue(child.Self.Guid, out var childNode))
                     {
-                        sb.AppendLine($"⚠ child not found: {child.Self.Name} ({child.Self.Guid[..8]})");
+                        sb.AppendLine($"[Warning] Child node not found in map: {child.Self.Name}");
                         continue;
                     }
 
+                    // Create and add the visual edge
                     var edge = outputPort.ConnectTo(childNode.InputPort);
                     AddElement(edge);
-                    sb.AppendLine($"Edge: {converted.Self.Name}.{fieldName} → {child.Self.Name}");
+                    sb.AppendLine($"Edge Created: {converted.Self.Name}.{fieldName} -> {child.Self.Name}");
                 }
             }
 
-            // 子も再帰
+            // Recurse for each child
             foreach (var kvp in converted.FieldChildren)
             {
                 foreach (var child in kvp.Value)
+                {
                     ConnectEdgesRecursive(child, guidMap, sb);
+                }
             }
         }
 
-
-
-        // AstGraphView内
+        /// <summary>
+        /// Identifies nodes that do not have any incoming connections.
+        /// </summary>
+        /// <returns>An array of root AstNodes.</returns>
         public AstNode[] GetRootNodes()
         {
             var connectedInputs = new HashSet<AstNode>();
@@ -150,7 +179,11 @@ namespace NodeCodeSync.Editor.ASTEditor
                 .Where(n => !connectedInputs.Contains(n))
                 .ToArray();
         }
-        public void NodeDataStartBus()
+
+        /// <summary>
+        /// Serializes the current graph state back into C# code and broadcasts it via the EventBus.
+        /// </summary>
+        public void SyncGraphToCode()
         {
             AstNode[] roots = GetRootNodes();
             string code = NodeToCodeConverter.NodeMetasToCSharp(roots, this, true);
@@ -158,7 +191,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         // =========================================================
-        // ポート互換性
+        // Port Compatibility
         // =========================================================
 
         public override List<Port> GetCompatiblePorts(Port startPort, NodeAdapter nodeAdapter)
@@ -166,16 +199,18 @@ namespace NodeCodeSync.Editor.ASTEditor
             var compatible = new List<Port>();
             ports.ForEach(port =>
             {
+                // Validation: Cannot connect to self, same node, or same direction
                 if (port == startPort) return;
                 if (port.node == startPort.node) return;
                 if (port.direction == startPort.direction) return;
+
                 compatible.Add(port);
             });
             return compatible;
         }
 
         // =========================================================
-        // コンテキストメニュー
+        // Context Menu
         // =========================================================
 
         public override void BuildContextualMenu(ContextualMenuPopulateEvent evt)
@@ -189,19 +224,17 @@ namespace NodeCodeSync.Editor.ASTEditor
             );
         }
 
-        void AddNode(Vector2 position)
+        /// <summary>
+        /// Manually adds a new AstNode to the graph at the specified position.
+        /// </summary>
+        private void AddNode(Vector2 position)
         {
             var node = new AstNode();
             node.SetPosition(new Rect(position, new Vector2(300, 200)));
             AddElement(node);
 
-            void changeHandler()
-            {
-                OnGraphDataChanged?.Invoke();
-            }
-
+            Action changeHandler = () => OnGraphDataChanged?.Invoke();
             node.OnNodeDataChanged += changeHandler;
-
 
             node.RegisterCallback<DetachFromPanelEvent>(_ =>
             {
@@ -211,7 +244,5 @@ namespace NodeCodeSync.Editor.ASTEditor
 
             OnGraphDataChanged?.Invoke();
         }
-
-        
     }
 }

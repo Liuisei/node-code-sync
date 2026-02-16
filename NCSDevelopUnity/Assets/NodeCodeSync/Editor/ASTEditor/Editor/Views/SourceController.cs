@@ -143,7 +143,8 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// バス入る CodeData
+        /// Publishes the current source code to the event bus (CodeData).
+        /// Triggered by the "Generate Graph" button.
         /// </summary>
         private void GanerateButtonClicked()
         {
@@ -152,7 +153,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// バス降りる NodeData
+        /// Receives NodeData from the event bus and updates the source preview.
         /// </summary>
         private void UpdateSourcePreview(string nodeMetas)
         {

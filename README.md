@@ -1,76 +1,77 @@
+🇯🇵 Japanese: Packages/com.nodecodesync.unity/Documentation~/README_JP.md
 # NodeCodeSync (NCS)
+
+**Bidirectional Code ↔ Node sync — with `.cs` as the source of truth.**  
+Nodes are projections. Your IDE stays in charge.
 
 ## Code-Driven Visual Projection
 
-> ノードを本体にしない。  
-> コードを真実にする。
+> Nodes are not the source of truth.  
+> Code is the truth.
 
 ---
 
-## 現場で起きていること（プログラマー × プランナー）
+## What happens in production (Programmers × Designers)
 
-ビジュアルスクリプト（BP/BT など）は強力ですが、  
-実運用では役割の境界が曖昧になりやすく、制作体制に歪みが生まれます。
+Visual scripting (Blueprint/Behavior Tree–style systems) is powerful, but in real production the boundary between roles often becomes blurred, creating friction in the workflow.
 
-### プログラマー側の痛み
-- 数値調整や挙動確認に時間を取られる
-- 設計・抽象化・最適化・テストに集中できない
-- IDEの解析・デバッグ能力が十分に活かせない
+### Pain on the programmer side
+- Spending time replaying behaviors and tweaking numbers
+- Losing focus on architecture, abstraction, optimization, and testing
+- Not being able to fully leverage IDE-level analysis and debugging
 
-### プランナー側の痛み
-- 機能不足により実装側へ寄らざるを得ない
-- 差分が見えづらく、レビューしづらい
-- 変更の影響範囲が不透明で調整が怖い
+### Pain on the designer side
+- Being forced toward implementation because required features are missing
+- Changes being hard to review and communicate
+- Unclear impact/diff making iteration feel risky
 
-結果として、
+As a result:
+- Git diffs are hard
+- PR review becomes difficult
+- CI and automated testing don’t fit well
+- Asset corruption becomes a risk
 
-- Git差分が取れない
-- PRレビューが難しい
-- CIや自動テストに乗りにくい
-- アセット破損リスクがある
-
-といった構造的問題が制作速度を鈍らせます。
+These structural issues slow down iteration.
 
 ---
 
-## NCSが作る未来
+## The future NCS enables
 
-NCSは、コードを **Single Source of Truth** として扱うことで  
-専門分離が自然に成立する制作体制を実現します。
+By treating code as the **Single Source of Truth**, NCS enables a workflow where specialization naturally works.
 
-### プログラマーはコードに集中できる
-設計・抽象化・最適化・テストに専念できる。  
-IDEの解析・デバッグ・リファクタリング能力をそのまま使える。
+### Programmers can focus on code
+They can concentrate on architecture, abstraction, optimization, and testing—  
+while using their IDE’s analysis, debugging, and refactoring capabilities as-is.
 
-### プランナーは面白さに集中できる
-挙動調整・構造試行錯誤・バランス設計に専念できる。  
-ノード編集はUIであり、成果物は常にコードとして残る。
+### Designers can focus on fun
+They can iterate on behavior tuning, structural experimentation, and balancing.  
+Nodes are UI; the final artifact is always code.
 
-制作における「翻訳コスト」をゼロにする。
+NCS aims to eliminate “translation cost” in production.
 
 ---
 
 ## Core Architecture
 
-- **Model** : C# ソースコード（Single Source of Truth）
-- **Projection** : Unity ノードグラフ UI
-- **Transformer** : Roslyn 双方向変換レイヤ
+- **Model**: C# source code (Single Source of Truth)
+- **Projection**: Unity node graph UI
+- **Transformer**: Roslyn-backed bidirectional conversion layer
 
-ノードは投影。  
-コードが真実。
+Nodes are projections.  
+Code is the truth.
 
 ---
 
-## Projectional Editing ではない
+## Not Projectional Editing
 
-既存の Projectional Editor は AST を直接操作します。  
-テキストは副産物です。
+Traditional projectional editors operate directly on AST.  
+Text is a byproduct.
 
-NCSは異なる立場を取ります。
+NCS takes a different stance:
 
-- Roslyn を中核に据え
-- C# ソースコードを第一級市民として扱い
-- ノードとコードを双方向同期させる
+- Roslyn is at the core
+- C# source files remain first-class citizens
+- Nodes and code stay bidirectionally synchronized
 
 ---
 
@@ -78,51 +79,45 @@ NCSは異なる立場を取ります。
 
 | | Projectional Editing | NCS |
 |---|----------------------|-----|
-| 真実の所在 | AST | C# ソースコード |
-| パーサー | 不要 | Roslyn |
-| 編集方向 | AST → 画面 | Code ↔ Node |
-| 永続化 | 独自形式 | `.cs`（Git管理可能） |
+| Source of truth | AST | C# source code |
+| Parser | Not needed | Roslyn |
+| Editing direction | AST → UI | Code ↔ Node |
+| Persistence | Custom format | `.cs` (Git-friendly) |
 
-> `.cs` ファイルが第一級市民であり続ける。
+> `.cs` files remain first-class citizens.
 
 ---
 
 ## Architecture Overview
 
-```
-┌─────────────┐     Roslyn ParseText()    ┌──────────────┐
-│  C# Source  │ ◀──────────────────────── │  Node Graph  │
-│  (.cs file) │                           │  (GraphView) │
-│             │ ─────────────────────────▶│              │
-└─────────────┘     Roslyn AST → NodeMeta └──────────────┘
+┌─────────────┐      ParseText()       ┌──────────────┐
+│  C# Source  │ ◀────────────────────  │  Node Graph  │
+│  (.cs file) │                        │  (GraphView) │
+│             │ ─────────────────────▶ │              │
+└─────────────┘     AST → NodeMeta     └──────────────┘
        │
-       │            ┌─────────────┐
-       └───────────▶│ Roslyn AST  │
-                    │  (実体)     │
-                    └─────────────┘
-```
-
+       └───────────▶  Roslyn AST (entity)
 ---
 
 ## Schema-Driven Design
 
-Roslyn の全構文ノード定義を XML スキーマとして保持。
+Roslyn’s full syntax node definitions are stored as an XML schema.
 
 - **NodeMeta**
 - **FieldUnit**
 - **FieldMetadata**
 
-スキーマ差し替えで多言語対応可能。
+By swapping schemas, the same framework can be adapted to other languages.
 
 ---
 
 ## Design Principles
 
-- Model は汚さない
-- 親子関係は Edge が唯一の情報源
-- 中間ツリーを持たない
-- コードが常に真実
-- ノードはコードの投影
+- Keep the model clean
+- Parent/child relations are derived from edges (the single source of structure)
+- No intermediate trees
+- Code is always the source of truth
+- Nodes are projections of code
 
 ---
 
@@ -132,7 +127,7 @@ Roslyn の全構文ノード定義を XML スキーマとして保持。
 - Unity UI Toolkit
 - Unity GraphView
 - Microsoft Roslyn Syntax API
-- UPM Package
+- UPM package distribution
 
 ---
 

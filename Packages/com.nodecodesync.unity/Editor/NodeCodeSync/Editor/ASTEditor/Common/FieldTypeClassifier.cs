@@ -1,58 +1,60 @@
-// Path: Assets/NodeCodeSync/Editor/ASTEditor/Common/FieldTypeClassifier.cs
+// Path: NodeCodeSync/Editor/ASTEditor/Common/FieldTypeClassifier.cs
 namespace NodeCodeSync.Editor.ASTEditor
 {
     /// <summary>
-    /// フィールドの型分類
+    /// Classifies field types used by Roslyn syntax nodes.
+    /// This is primarily used to decide how a field should be represented in the UI
+    /// (e.g., editable text vs. graph ports).
     /// </summary>
     public enum FieldTypeKind
     {
-        /// <summary>単一トークン（SyntaxToken）</summary>
+        /// <summary>Single token (SyntaxToken).</summary>
         Token,
 
-        /// <summary>トークンリスト（SyntaxList&lt;SyntaxToken&gt;）</summary>
+        /// <summary>Token list (SyntaxList&lt;SyntaxToken&gt;).</summary>
         TokenList,
 
-        /// <summary>ノードリスト（SyntaxList&lt;T&gt; where T : SyntaxNode）</summary>
+        /// <summary>Node list (SyntaxList&lt;T&gt; where T : SyntaxNode).</summary>
         NodeList,
 
-        /// <summary>区切り付きノードリスト（SeparatedSyntaxList&lt;T&gt;）</summary>
+        /// <summary>Separated node list (SeparatedSyntaxList&lt;T&gt;).</summary>
         SeparatedNodeList,
 
-        /// <summary>単一ノード（xxxSyntax）</summary>
+        /// <summary>Single syntax node type (e.g., *Syntax).</summary>
         SingleNode,
 
-        /// <summary>不明な型</summary>
+        /// <summary>Unknown or unsupported type.</summary>
         Unknown
     }
 
     /// <summary>
-    /// フィールド型文字列から FieldTypeKind を判定するユーティリティ
+    /// Utility for mapping Roslyn type strings to <see cref="FieldTypeKind"/>.
     /// </summary>
     public static class FieldTypeClassifier
     {
         /// <summary>
-        /// 型文字列を分類する
+        /// Classifies a Roslyn field type string into a <see cref="FieldTypeKind"/>.
         /// </summary>
         public static FieldTypeKind Classify(string fieldType)
         {
             if (string.IsNullOrEmpty(fieldType))
                 return FieldTypeKind.Unknown;
 
-            // 完全一致チェック（優先度高）
+            // Exact matches (highest priority).
             if (fieldType == "SyntaxToken")
                 return FieldTypeKind.Token;
 
             if (fieldType == "SyntaxList<SyntaxToken>")
                 return FieldTypeKind.TokenList;
 
-            // 前方一致チェック（SeparatedSyntaxList を先にチェック）
+            // Prefix matches (check SeparatedSyntaxList before SyntaxList).
             if (fieldType.StartsWith("SeparatedSyntaxList"))
                 return FieldTypeKind.SeparatedNodeList;
 
             if (fieldType.StartsWith("SyntaxList"))
                 return FieldTypeKind.NodeList;
 
-            // 後方一致チェック
+            // Suffix matches.
             if (fieldType.EndsWith("Syntax"))
                 return FieldTypeKind.SingleNode;
 
@@ -60,7 +62,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// トークン系か（TextField で編集する型）
+        /// Returns true if the kind is token-based (typically edited with a text field).
         /// </summary>
         public static bool IsTokenType(FieldTypeKind kind)
         {
@@ -68,7 +70,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// ノード系か（Port で接続する型）
+        /// Returns true if the kind is node-based (typically connected via ports).
         /// </summary>
         public static bool IsNodeType(FieldTypeKind kind)
         {
@@ -78,7 +80,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// リスト系か（Multi Port）
+        /// Returns true if the kind represents a list type (typically rendered as multi-ports).
         /// </summary>
         public static bool IsListType(FieldTypeKind kind)
         {
@@ -87,7 +89,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// 区切り文字が必要か
+        /// Returns true if the list requires separators (e.g., comma-separated lists).
         /// </summary>
         public static bool NeedsSeparator(FieldTypeKind kind)
         {

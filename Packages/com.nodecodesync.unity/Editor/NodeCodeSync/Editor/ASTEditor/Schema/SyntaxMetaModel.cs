@@ -3,9 +3,10 @@ using System;
 // Path: Assets/NodeCodeSync/Editor/ASTEditor/Schema/SyntaxMetaModel.cs
 namespace NodeCodeSync.Editor.ASTEditor
 {
-    // ============================================
-    // トップレベル: Tree要素
-    // ============================================
+    /// <summary>
+    /// The root structure representing the entire Roslyn syntax hierarchy.
+    /// Acts as the "World Map" for all possible code structures.
+    /// </summary>
     public struct NCSSyntaxTree
     {
         public readonly string Root;
@@ -26,9 +27,9 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
     }
 
-    // ============================================
-    // PredefinedNode要素
-    // ============================================
+    /// <summary>
+    /// Metadata for built-in Roslyn types (e.g., SyntaxToken, SyntaxNode).
+    /// </summary>
     public readonly struct PredefinedNodeMeta
     {
         public readonly string Name;
@@ -41,9 +42,10 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
     }
 
-    // ============================================
-    // AbstractNode要素
-    // ============================================
+    /// <summary>
+    /// Metadata for base syntax classes (e.g., ExpressionSyntax, StatementSyntax).
+    /// Defines shared properties inherited by multiple concrete nodes.
+    /// </summary>
     public readonly struct AbstractNodeMeta
     {
         public readonly string Name;
@@ -60,9 +62,10 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
     }
 
-    // ============================================
-    // Node要素
-    // ============================================
+    /// <summary>
+    /// Represents a concrete SyntaxNode (e.g., ClassDeclaration, InvocationExpression).
+    /// This is the primary template for creating Graph Nodes.
+    /// </summary>
     public readonly struct NodeMeta
     {
         public readonly string Name;
@@ -72,7 +75,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         public readonly string TypeComment;
         public readonly string FactoryComment;
         public readonly bool SkipConvenienceFactories;
-        public readonly string Guid;
+        public readonly string Guid; // Unique identifier for the instance in the graph.
 
         public NodeMeta(
             string name,
@@ -95,15 +98,16 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
     }
 
-    // ============================================
-    // FieldUnit: Field/Choice/Sequenceの統合型
-    // ============================================
+    /// <summary>
+    /// A unified structural unit that can represent a single Field, a Choice, or a Sequence.
+    /// Supports recursive composition to mirror the complexity of C# syntax.
+    /// </summary>
     public readonly struct FieldUnit
     {
         public readonly FieldUnitType Type;
-        public readonly FieldMetadata Data;      // 構造体として直接保持
+        public readonly FieldMetadata Data;      // Stores metadata and actual code values.
         public readonly FieldUnit[] Children;
-        public readonly int ChoiceIndex; // Choiceの中でどれが選ばれたかを示すインデックス
+        public readonly int ChoiceIndex; // Index of the selected option in a Choice unit.
 
         public FieldUnit(FieldUnitType type, FieldMetadata data, FieldUnit[] children, int choiceIndex = 0)
         {
@@ -131,7 +135,6 @@ namespace NodeCodeSync.Editor.ASTEditor
 
         public static FieldUnit CreateChoice(FieldUnit[] children, bool optional = false)
         {
-            // Choice自体がOptionalな場合も、Dataを使って情報を保持
             var data = new FieldMetadata(optional: optional);
             return new FieldUnit(FieldUnitType.Choice, data, children);
         }
@@ -149,9 +152,10 @@ namespace NodeCodeSync.Editor.ASTEditor
         Sequence
     }
 
-    // ============================================
-    // FieldMetadata: 構造体化による最適化
-    // ============================================
+    /// <summary>
+    /// Holds both the schema definition (Name, Type) and the dynamic state (Value).
+    /// This optimization allows the model to act as a direct data source for code generation.
+    /// </summary>
     public readonly struct FieldMetadata
     {
         public readonly string Name;
@@ -163,8 +167,11 @@ namespace NodeCodeSync.Editor.ASTEditor
         public readonly string[] Kinds;
         public readonly string PropertyComment;
 
-        // これを追加することでただのメタデータから コードを書けるModelになる...うひょー最高!
-        public readonly string Value; // 追加のフィールドが必要な場合はここに追加
+        /// <summary>
+        /// The actual content/value of this field (e.g., variable name, literal string).
+        /// Presence of this field transforms this from "Schema" to "Instance Data".
+        /// </summary>
+        public readonly string Value;
 
         public FieldMetadata(
             string name = null,
@@ -189,9 +196,12 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
     }
 
+    /// <summary>
+    /// Utility for creating new, immutable instances of metadata with updated values.
+    /// Ensures that state changes are handled safely via functional updates.
+    /// </summary>
     public static class NodeMetaExtensions
     {
-        // 引数に newIndex を追加（デフォルト -1 は「更新しない」の意味）
         public static NodeMeta UpdateValue(this NodeMeta meta, string targetName, string newValue, int newIndex = -1)
         {
             if (meta.Fields == null) return meta;
@@ -211,16 +221,14 @@ namespace NodeCodeSync.Editor.ASTEditor
 
         private static FieldUnit UpdateRecursive(FieldUnit unit, string targetName, string newValue, int newIndex)
         {
-            // 1. Choice自体のインデックスを更新する場合
-            // ※ ChoiceのData.Nameがターゲットと一致した時だけ！
+            // Case 1: Updating the selected index of a Choice unit.
             if (unit.Type == FieldUnitType.Choice && unit.Data.Name == targetName)
             {
-                // Indexが指定されていたら（-1じゃなければ）更新、そうでなければ今のを維持
                 int nextIndex = (newIndex != -1) ? newIndex : unit.ChoiceIndex;
                 return new FieldUnit(unit.Type, unit.Data, unit.Children, nextIndex);
             }
 
-            // 2. SingleのValueを更新する場合（前と同じ）
+            // Case 2: Updating the Value of a Single field unit.
             if (unit.Type == FieldUnitType.Single && unit.Data.Name == targetName)
             {
                 var newData = new FieldMetadata(
@@ -232,7 +240,7 @@ namespace NodeCodeSync.Editor.ASTEditor
                 return new FieldUnit(unit.Type, newData, unit.Children, unit.ChoiceIndex);
             }
 
-            // 3. 再帰処理（Childrenの中も同じルールで更新）
+            // Case 3: Recursively searching within nested Children.
             if (unit.Children != null && unit.Children.Length > 0)
             {
                 var newChildren = new FieldUnit[unit.Children.Length];

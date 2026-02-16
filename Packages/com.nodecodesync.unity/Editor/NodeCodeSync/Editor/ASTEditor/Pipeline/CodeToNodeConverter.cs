@@ -5,11 +5,12 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 
-// Path: Assets/NodeCodeSync/Editor/ASTEditor/Pipeline/CodeToNodeConverter.cs
+// Path: NodeCodeSync/Editor/ASTEditor/Pipeline/CodeToNodeConverter.cs
 namespace NodeCodeSync.Editor.ASTEditor
 {
     /// <summary>
-    /// 変換時の一時ツリー構造（グラフ配置後は捨てる）
+    /// Represents a temporary node structure during the conversion process from C# code to a visual graph.
+    /// This structure is used to build the hierarchy before converting to persistent graph edges.
     /// </summary>
     public class ConvertedNode
     {
@@ -18,15 +19,16 @@ namespace NodeCodeSync.Editor.ASTEditor
     }
 
     /// <summary>
-    /// C# → ConvertedNode ツリー（リフレクション完全ゼロ）
-    /// Kind名でキャッシュから雛形取得 → Value / ChoiceIndex を差し込み
-    /// 親子関係は FieldChildren で保持 → グラフ配置時に Edge へ変換
+    /// Core engine that converts C# Source Code (Roslyn SyntaxTree) into a ConvertedNode tree.
+    /// Uses reflection-based mapping to align Roslyn's internal properties with the custom XML schema.
     /// </summary>
     public static class CodeToNodeConverter
     {
         /// <summary>
-        /// C#ソースコード → ConvertedNode ツリーのルートを返す
+        /// Entry point: Converts raw C# source code into a visual-ready node tree.
         /// </summary>
+        /// <param name="sourceCode">The raw C# source string.</param>
+        /// <returns>The root ConvertedNode of the generated tree.</returns>
         public static ConvertedNode CsharpToConvertedTree(string sourceCode)
         {
             var astRoot = NodeToCodeConverter.CSharpToAST(sourceCode);
@@ -43,25 +45,25 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// SyntaxNode → ConvertedNode（再帰）
-        /// 自分のNodeMetaを作り、子SyntaxNodeをFieldName別に振り分ける
+        /// Recursively builds ConvertedNodes from Roslyn SyntaxNodes.
+        /// Maps SyntaxKinds to NodeMeta templates and populates values.
         /// </summary>
         static ConvertedNode BuildConvertedNode(SyntaxNode syntaxNode, RoslynSchemaCache cache, StringBuilder sb, int depth)
         {
             var indent = new string(' ', depth * 2);
             var kindName = syntaxNode.Kind().ToString();
 
-            // Kind→NodeMeta テンプレート取得
+            // Retrieve NodeMeta template matching the SyntaxKind
             if (!cache.KindToNodeMetaMap.TryGetValue(kindName, out var meta))
             {
                 sb.AppendLine($"{indent}⚠ Kind not found: {kindName}");
                 return null;
             }
 
-            // Token値・ChoiceIndex埋め
+            // Populate tokens and choice indices
             meta = FillValues(meta, syntaxNode, cache);
 
-            // GUID付与
+            // Assign unique identity
             var guid = System.Guid.NewGuid().ToString();
             meta = new NodeMeta(
                 meta.Name, meta.Base, meta.Kinds, meta.Fields,
@@ -71,10 +73,10 @@ namespace NodeCodeSync.Editor.ASTEditor
 
             sb.AppendLine($"{indent}✓ {meta.Name} (Kind={kindName}, Guid={guid[..8]})");
 
-            // FieldChildren構築: リフレクションでプロパティ名→子SyntaxNodeを確実に紐付け
+            // Build structural children using reflection to ensure property-to-field alignment
             var fieldChildren = BuildFieldChildrenByReflection(syntaxNode, cache, sb, depth, meta);
 
-            // FieldChildrenの実データを使ってChoiceIndexを修正
+            // Refine ChoiceIndex based on actual populated child data
             meta = FixChoiceIndexByFieldChildren(meta, fieldChildren);
 
             return new ConvertedNode
@@ -85,8 +87,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// Fields配列からNode系フィールドの(Name, FieldType)を走査順で収集
-        /// Choice/Sequence内も再帰的に探索
+        /// Scans the FieldUnits to collect metadata for all fields categorized as 'Nodes'.
         /// </summary>
         static List<(string Name, string FieldType)> CollectNodeFields(FieldUnit[] fields)
         {
@@ -118,9 +119,8 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// リフレクションでSyntaxNodeのプロパティを走査し、
-        /// プロパティ名＝fieldNameとしてFieldChildrenを構築する
-        /// スキーマに存在するNode系フィールド名だけ対象にする（Parent等の逆参照を除外）
+        /// Uses reflection to traverse Roslyn SyntaxNode properties and map them to schema fields.
+        /// Filters out non-schema properties (like 'Parent') to avoid circular references.
         /// </summary>
         static Dictionary<string, ConvertedNode[]> BuildFieldChildrenByReflection(
             SyntaxNode syntaxNode, RoslynSchemaCache cache, StringBuilder sb, int depth,
@@ -129,7 +129,7 @@ namespace NodeCodeSync.Editor.ASTEditor
             var indent = new string(' ', depth * 2);
             var fieldChildren = new Dictionary<string, ConvertedNode[]>();
 
-            // スキーマからNode系フィールド名のSetを作る（これに含まれるプロパティだけ対象）
+            // Create a set of valid node-type field names from the schema
             var validFieldNames = new HashSet<string>();
             foreach (var (name, _) in CollectNodeFields(meta.Fields))
                 validFieldNames.Add(name);
@@ -141,12 +141,12 @@ namespace NodeCodeSync.Editor.ASTEditor
 
             foreach (var prop in props)
             {
-                // スキーマに無いプロパティはスキップ（Parent等の逆参照防止）
+                // Skip properties not defined in our XML schema
                 if (!validFieldNames.Contains(prop.Name)) continue;
 
                 var propType = prop.PropertyType;
 
-                // 単一SyntaxNode
+                // Case: Single SyntaxNode
                 if (typeof(SyntaxNode).IsAssignableFrom(propType))
                 {
                     var childSyntax = prop.GetValue(syntaxNode) as SyntaxNode;
@@ -161,7 +161,7 @@ namespace NodeCodeSync.Editor.ASTEditor
                     continue;
                 }
 
-                // SyntaxList<T> / SeparatedSyntaxList<T>
+                // Case: SyntaxList<T> or SeparatedSyntaxList<T>
                 if (typeof(System.Collections.IEnumerable).IsAssignableFrom(propType)
                     && propType != typeof(string))
                 {
@@ -195,8 +195,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// FieldChildrenの実データを使ってChoiceIndexを修正する
-        /// リフレクションで正確な子振り分けが済んだ後に呼ぶ
+        /// Corrects the ChoiceIndex of a NodeMeta by checking which field actually contains data.
         /// </summary>
         static NodeMeta FixChoiceIndexByFieldChildren(NodeMeta meta, Dictionary<string, ConvertedNode[]> fieldChildren)
         {
@@ -212,7 +211,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         {
             if (unit.Type == FieldUnitType.Choice && unit.Children?.Length > 0)
             {
-                // Choiceの各子を見て、FieldChildrenにキーが存在する方を選ぶ
+                // Iterate through choice options to find the one with active data
                 for (int i = 0; i < unit.Children.Length; i++)
                 {
                     if (ChoiceChildHasData(unit.Children[i], fieldChildren))
@@ -233,7 +232,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// Choice の子フィールドが FieldChildren に実データを持つか判定
+        /// Determines if a specific child of a Choice unit contains actual data in the fieldChildren map.
         /// </summary>
         static bool ChoiceChildHasData(FieldUnit child, Dictionary<string, ConvertedNode[]> fieldChildren)
         {
@@ -244,7 +243,7 @@ namespace NodeCodeSync.Editor.ASTEditor
                     return fieldChildren.ContainsKey(child.Data.Name);
             }
 
-            // Sequence: 子のどれかがFieldChildrenに存在すればOK
+            // Sequence: True if any nested child has data
             if (child.Children != null)
             {
                 foreach (var c in child.Children)
@@ -257,17 +256,17 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         // ===================================================================
-        // 以下、既存のFillValues系（変更なし）
+        // Value Injection Helpers
         // ===================================================================
 
         static NodeMeta FillValues(NodeMeta meta, SyntaxNode syntaxNode, RoslynSchemaCache cache)
         {
             if (meta.Fields == null) return meta;
 
-            // Token値埋め: リフレクションでプロパティ名→フィールド名を正確に紐付け
+            // Map token values from Roslyn properties to schema fields
             meta = FillTokensByReflection(meta, syntaxNode);
 
-            // ChoiceIndex 埋め
+            // Populate initial choice indices
             for (int i = 0; i < meta.Fields.Length; i++)
                 meta = FillChoiceIndex(meta, meta.Fields[i], syntaxNode);
 
@@ -275,9 +274,8 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// リフレクションでSyntaxNodeのTokenプロパティを走査し、
-        /// フィールド名と一致するプロパティの値をNodeMetaに埋める
-        /// TokenList（Modifiers等）はスペース区切りで結合
+        /// Maps Roslyn SyntaxTokens to schema fields.
+        /// Concatenates TokenLists (e.g., Modifiers) with space separators.
         /// </summary>
         static NodeMeta FillTokensByReflection(NodeMeta meta, SyntaxNode syntaxNode)
         {
@@ -294,7 +292,6 @@ namespace NodeCodeSync.Editor.ASTEditor
 
                 if (kind == FieldTypeKind.Token)
                 {
-                    // 単一トークン: SyntaxToken型
                     if (prop.PropertyType == typeof(SyntaxToken))
                     {
                         var token = (SyntaxToken)prop.GetValue(syntaxNode);
@@ -304,7 +301,6 @@ namespace NodeCodeSync.Editor.ASTEditor
                 }
                 else if (kind == FieldTypeKind.TokenList)
                 {
-                    // TokenList: SyntaxTokenList型 → スペース区切りで結合
                     var value = prop.GetValue(syntaxNode);
                     if (value is SyntaxTokenList tokenList && tokenList.Count > 0)
                     {
@@ -321,7 +317,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// Fields配列からToken系フィールドの(Name→FieldType)を収集
+        /// Scans for Token-type fields within the schema.
         /// </summary>
         static Dictionary<string, string> CollectTokenFields(FieldUnit[] fields)
         {
@@ -351,8 +347,8 @@ namespace NodeCodeSync.Editor.ASTEditor
         }
 
         /// <summary>
-        /// Kinds[] に登録がないトークン（Identifier, Literal 等）
-        /// まだ Value が空の Kinds なし Token フィールドに入れる
+        /// Handles tokens without predefined Kinds (e.g., Identifiers, Literals).
+        /// Fills the first available empty Token field.
         /// </summary>
         static NodeMeta FillUnmappedToken(NodeMeta meta, SyntaxToken token)
         {
@@ -384,6 +380,9 @@ namespace NodeCodeSync.Editor.ASTEditor
             return meta;
         }
 
+        /// <summary>
+        /// Initial pass to set ChoiceIndex based on the presence of child Kinds.
+        /// </summary>
         static NodeMeta FillChoiceIndex(NodeMeta meta, FieldUnit unit, SyntaxNode syntaxNode)
         {
             if (unit.Type == FieldUnitType.Choice && unit.Children?.Length > 0)
@@ -414,6 +413,9 @@ namespace NodeCodeSync.Editor.ASTEditor
             return meta;
         }
 
+        /// <summary>
+        /// Checks if a child unit's Kinds exist within the current SyntaxNode's children.
+        /// </summary>
         static bool ChoiceChildExists(FieldUnit child, HashSet<string> childKinds, HashSet<string> childTokenKinds)
         {
             if (child.Type != FieldUnitType.Single || string.IsNullOrEmpty(child.Data.FieldType))

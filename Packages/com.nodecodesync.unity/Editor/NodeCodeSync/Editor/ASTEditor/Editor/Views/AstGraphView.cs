@@ -6,7 +6,7 @@ using UnityEditor.Experimental.GraphView;
 using UnityEngine;
 using UnityEngine.UIElements;
 
-// Path: Assets/NodeCodeSync/Editor/ASTEditor/Editor/Views/AstGraphView.cs
+// Path: NodeCodeSync/Editor/ASTEditor/Editor/Views/AstGraphView.cs
 namespace NodeCodeSync.Editor.ASTEditor
 {
     /// <summary>

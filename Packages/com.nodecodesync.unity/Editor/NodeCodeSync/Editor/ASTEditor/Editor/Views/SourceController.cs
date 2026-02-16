@@ -5,28 +5,32 @@ using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.UIElements;
 
-// Path: Assets/NodeCodeSync/Editor/ASTEditor/Editor/Views/SourceController.cs
+// Path: NodeCodeSync/Editor/ASTEditor/Editor/Views/SourceController.cs
 namespace NodeCodeSync.Editor.ASTEditor
 {
+    /// <summary>
+    /// Controller responsible for managing source code input and synchronization.
+    /// It handles C# file selection, triggers graph generation, and provides 
+    /// a real-time preview of the source code generated from the node graph.
+    /// </summary>
     public class SourceController : IDisposable
     {
+        /// <summary>
+        /// Gets the root visual element containing the file selector and code previews.
+        /// </summary>
         public VisualElement Root { get => _root; }
 
         private VisualElement _root;
 
-        ObjectField fileField;
-        TextField originalCodeField;
-        TextField sourcePreviewField;
+        // UI Components
+        private ObjectField fileField;
+        private TextField originalCodeField;
+        private TextField sourcePreviewField;
 
-
-        public void Dispose()
-        {
-            if (NodeCodeDataEventBus.Instance != null)
-            {
-                NodeCodeDataEventBus.Instance.OnNodeUpdated -= UpdateSourcePreview;
-            }
-        }
-
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SourceController"/> class.
+        /// Sets up the UI layout and subscribes to synchronization events.
+        /// </summary>
         public SourceController()
         {
             _root = new VisualElement()
@@ -42,8 +46,9 @@ namespace NodeCodeSync.Editor.ASTEditor
                 }
             };
 
-            // --- File Input ---
-            fileField = new ObjectField("C# File")
+            // --- Section: File Selection ---
+            // Allows users to pick a C# script (MonoScript) from the project assets.
+            fileField = new ObjectField("Target C# File")
             {
                 objectType = typeof(MonoScript),
                 allowSceneObjects = false
@@ -54,26 +59,28 @@ namespace NodeCodeSync.Editor.ASTEditor
                 if (script != null)
                 {
                     originalCodeField.value = script.text;
+                    // Initial conversion to AST for the structural debugger
                     CompilationUnitSyntax compilationUnitSyntax = NodeToCodeConverter.CSharpToAST(originalCodeField.value);
                     NodeCodeDataEventBus.Instance.UpdateCodeCompilationUnitSyntax(compilationUnitSyntax);
                 }
                 else
                 {
-                    originalCodeField.value = "";
+                    originalCodeField.value = string.Empty;
                 }
             });
             _root.Add(fileField);
 
-            // --- Generate Button ---
+            // --- Section: Actions ---
             var generateButton = new Button(GanerateButtonClicked)
             {
-                text = "Generate Graph",
+                text = "Generate Node Graph",
                 style = { marginTop = 8 }
             };
             _root.Add(generateButton);
 
-            // --- Original Code ---
-            var originalTitle = new Label("Original Code")
+            // --- Section: Original Source View ---
+            // Displays the raw content of the selected C# file.
+            var originalTitle = new Label("Original Source Code")
             {
                 style =
                 {
@@ -86,28 +93,21 @@ namespace NodeCodeSync.Editor.ASTEditor
 
             var originalScroll = new ScrollView(ScrollViewMode.VerticalAndHorizontal)
             {
-                style =
-                {
-                    flexGrow = 1,
-                    minHeight = 100
-                }
+                style = { flexGrow = 1, minHeight = 100 }
             };
 
             originalCodeField = new TextField
             {
                 multiline = true,
                 isReadOnly = true,
-                style =
-                {
-                    whiteSpace = WhiteSpace.Pre,
-                    fontSize = 11
-                }
+                style = { whiteSpace = WhiteSpace.Pre, fontSize = 11 }
             };
             originalScroll.Add(originalCodeField);
             _root.Add(originalScroll);
 
-            // --- Source Preview ---
-            var previewTitle = new Label("Source Preview")
+            // --- Section: Live Preview ---
+            // Shows the resulting code after editing the AST nodes.
+            var previewTitle = new Label("Synchronized Source Preview")
             {
                 style =
                 {
@@ -120,45 +120,50 @@ namespace NodeCodeSync.Editor.ASTEditor
 
             var previewScroll = new ScrollView(ScrollViewMode.VerticalAndHorizontal)
             {
-                style =
-                {
-                    flexGrow = 1,
-                    minHeight = 100
-                }
+                style = { flexGrow = 1, minHeight = 100 }
             };
 
             sourcePreviewField = new TextField
             {
                 multiline = true,
                 isReadOnly = true,
-                style =
-                {
-                    whiteSpace = WhiteSpace.Pre,
-                    fontSize = 11
-                }
+                style = { whiteSpace = WhiteSpace.Pre, fontSize = 11 }
             };
             previewScroll.Add(sourcePreviewField);
             _root.Add(previewScroll);
+
+            // Subscribe to node updates to reflect changes in the preview field
             NodeCodeDataEventBus.Instance.OnNodeUpdated += UpdateSourcePreview;
         }
 
         /// <summary>
-        /// Publishes the current source code to the event bus (CodeData).
-        /// Triggered by the "Generate Graph" button.
+        /// Broadcasts the current source code to the event bus to trigger graph generation.
         /// </summary>
         private void GanerateButtonClicked()
         {
-            Debug.Log("Generate Graph button clicked");
+            Debug.Log("[NodeCodeSync] Triggering Graph Generation from Source.");
             NodeCodeDataEventBus.Instance.UpdateCode(originalCodeField.value);
         }
 
         /// <summary>
-        /// Receives NodeData from the event bus and updates the source preview.
+        /// Updates the preview text field when the node graph data is modified.
         /// </summary>
+        /// <param name="nodeMetas">The generated source code string (or serialized node metadata).</param>
         private void UpdateSourcePreview(string nodeMetas)
         {
-            Debug.Log("Updating Source Preview");
+            // Update the UI to show the latest state of the code
             sourcePreviewField.value = nodeMetas;
+        }
+
+        /// <summary>
+        /// Cleans up event subscriptions to prevent memory leaks in the Unity Editor.
+        /// </summary>
+        public void Dispose()
+        {
+            if (NodeCodeDataEventBus.Instance != null)
+            {
+                NodeCodeDataEventBus.Instance.OnNodeUpdated -= UpdateSourcePreview;
+            }
         }
     }
 }

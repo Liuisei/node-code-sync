@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Xml.Linq;
 using UnityEngine;
 
-// Path: Assets/NodeCodeSync/Editor/ASTEditor/Schema/RoslynXmlLoader.cs
+// Path: NodeCodeSync/Editor/ASTEditor/Schema/RoslynXmlLoader.cs
 namespace NodeCodeSync.Editor.ASTEditor
 {
     public static class RoslynXmlLoader

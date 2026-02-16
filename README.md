@@ -1,4 +1,4 @@
-🇯🇵 Japanese: Packages/com.nodecodesync.unity/Documentation~/README_JP.md
+🇯🇵 Japanese: [README_JP](Packages/com.nodecodesync.unity/Doc/README_JP.md)
 # NodeCodeSync (NCS)
 
 **Bidirectional Code ↔ Node sync — with `.cs` as the source of truth.**  

@@ -9,7 +9,7 @@ NCS のノードモデルは、Roslyn の構文スキーマを Unity のグラ�
 
 ## 型の全体像
 
-```text
+```
 NCSSyntaxTree
 ├── PredefinedNodeMeta[]   // 組み込み型 (SyntaxToken など)
 ├── AbstractNodeMeta[]     // 抽象基底クラス (ExpressionSyntax など)
@@ -185,7 +185,7 @@ NodeMeta updated = nodeMeta.UpdateValue("ChoiceField", null, newIndex: 1);
 
 ## データフロー
 
-```text
+```
 RoslynSyntax.xml
       │
       ▼

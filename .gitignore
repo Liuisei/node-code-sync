@@ -101,3 +101,4 @@ NCSDevelopUnity/ProjectSettings/*.asset
 NCSDevelopUnity/Assets/Packages/
 NCSDevelopUnity/NCSDevelopUnity.slnx
 NCSDevelopUnity/.vscode/
+.claude/settings.local.json

@@ -139,11 +139,11 @@ NCS takes a different stance:
 ## Architecture Overview
 
 ```text
-┌─────────────┐     Roslyn ParseText()    ┌──────────────┐
+┌─────────────┐   NodeToCodeConverter     ┌──────────────┐
 │  C# Source  │ ◀──────────────────────── │  Node Graph  │
 │  (.cs file) │                           │  (GraphView) │
 │             │ ─────────────────────────▶│              │
-└─────────────┘     Roslyn AST → NodeMeta └──────────────┘
+└─────────────┘   ParseText() → NodeMeta  └──────────────┘
        │
        └───────────▶  Roslyn AST  (debug only)
 ```
@@ -170,7 +170,7 @@ Thank you for reading.
 
 ## Tech Stack
 
-- Unity 2022.3+ / Unity 6
+- Unity 6000.3+
 - Unity UI Toolkit
 - Unity GraphView
 - Microsoft Roslyn Syntax API

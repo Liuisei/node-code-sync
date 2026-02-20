@@ -99,3 +99,7 @@ InitTestScene*.unity*
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
 NCSDevelopUnity/ProjectSettings/*.asset
 NCSDevelopUnity/Assets/Packages/
+NCSDevelopUnity/.vscode/
+.claude/settings.local.json
+.claude/
+*.slnx

@@ -1,7 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
 using System.Text;
 
@@ -24,6 +24,53 @@ namespace NodeCodeSync.Editor.ASTEditor
     /// </summary>
     public static class CodeToNodeConverter
     {
+        // ===================================================================
+        // Static caches — populated once per unique type / NodeMeta name
+        // ===================================================================
+
+        /// <summary>Caches GetProperties() results per concrete SyntaxNode type.</summary>
+        static readonly Dictionary<Type, PropertyInfo[]> s_propertyCache =
+            new Dictionary<Type, PropertyInfo[]>();
+
+        /// <summary>Caches CollectNodeFields results per NodeMeta.Name.</summary>
+        static readonly Dictionary<string, List<(string Name, string FieldType)>> s_nodeFieldsCache =
+            new Dictionary<string, List<(string Name, string FieldType)>>();
+
+        /// <summary>Caches CollectTokenFields results per NodeMeta.Name.</summary>
+        static readonly Dictionary<string, Dictionary<string, string>> s_tokenFieldsCache =
+            new Dictionary<string, Dictionary<string, string>>();
+
+        /// <summary>Pre-built indent strings for depths 0–31 to avoid repeated allocation.</summary>
+        static readonly string[] s_indentCache = BuildIndentCache(32);
+
+        static string[] BuildIndentCache(int maxDepth)
+        {
+            var arr = new string[maxDepth];
+            for (int i = 0; i < maxDepth; i++)
+                arr[i] = new string(' ', i * 2);
+            return arr;
+        }
+
+        static string GetIndent(int depth)
+        {
+            if (depth < s_indentCache.Length) return s_indentCache[depth];
+            return new string(' ', depth * 2);
+        }
+
+        /// <summary>
+        /// Returns cached PropertyInfo[] for the given SyntaxNode type.
+        /// Avoids repeated reflection calls for the same concrete type.
+        /// </summary>
+        static PropertyInfo[] GetCachedProperties(Type type)
+        {
+            if (!s_propertyCache.TryGetValue(type, out var props))
+            {
+                props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                s_propertyCache[type] = props;
+            }
+            return props;
+        }
+
         /// <summary>
         /// Entry point: Converts raw C# source code into a visual-ready node tree.
         /// </summary>
@@ -50,7 +97,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         /// </summary>
         static ConvertedNode BuildConvertedNode(SyntaxNode syntaxNode, RoslynSchemaCache cache, StringBuilder sb, int depth)
         {
-            var indent = new string(' ', depth * 2);
+            var indent = GetIndent(depth);
             var kindName = syntaxNode.Kind().ToString();
 
             // Retrieve NodeMeta template matching the SyntaxKind
@@ -126,18 +173,25 @@ namespace NodeCodeSync.Editor.ASTEditor
             SyntaxNode syntaxNode, RoslynSchemaCache cache, StringBuilder sb, int depth,
             NodeMeta meta)
         {
-            var indent = new string(' ', depth * 2);
+            var indent = GetIndent(depth);
             var fieldChildren = new Dictionary<string, ConvertedNode[]>();
 
+            // Use cached node-field collection to avoid repeated traversal of the schema tree
+            if (!s_nodeFieldsCache.TryGetValue(meta.Name, out var nodeFieldList))
+            {
+                nodeFieldList = CollectNodeFields(meta.Fields);
+                s_nodeFieldsCache[meta.Name] = nodeFieldList;
+            }
+
             // Create a set of valid node-type field names from the schema
-            var validFieldNames = new HashSet<string>();
-            foreach (var (name, _) in CollectNodeFields(meta.Fields))
+            var validFieldNames = new HashSet<string>(nodeFieldList.Count);
+            foreach (var (name, _) in nodeFieldList)
                 validFieldNames.Add(name);
 
             if (validFieldNames.Count == 0) return fieldChildren;
 
-            var props = syntaxNode.GetType().GetProperties(
-                BindingFlags.Public | BindingFlags.Instance);
+            // Use cached reflection result for this concrete SyntaxNode type
+            var props = GetCachedProperties(syntaxNode.GetType());
 
             foreach (var prop in props)
             {
@@ -266,9 +320,18 @@ namespace NodeCodeSync.Editor.ASTEditor
             // Map token values from Roslyn properties to schema fields
             meta = FillTokensByReflection(meta, syntaxNode);
 
+            // Build child-kind sets once and reuse across all FillChoiceIndex calls
+            // to avoid repeated allocation of HashSet inside the recursive traversal
+            var childKinds = new HashSet<string>();
+            var childTokenKinds = new HashSet<string>();
+            foreach (var c in syntaxNode.ChildNodes())
+                childKinds.Add(c.Kind().ToString());
+            foreach (var t in syntaxNode.ChildTokens())
+                childTokenKinds.Add(t.Kind().ToString());
+
             // Populate initial choice indices
             for (int i = 0; i < meta.Fields.Length; i++)
-                meta = FillChoiceIndex(meta, meta.Fields[i], syntaxNode);
+                meta = FillChoiceIndex(meta, meta.Fields[i], childKinds, childTokenKinds);
 
             return meta;
         }
@@ -279,11 +342,17 @@ namespace NodeCodeSync.Editor.ASTEditor
         /// </summary>
         static NodeMeta FillTokensByReflection(NodeMeta meta, SyntaxNode syntaxNode)
         {
-            var tokenFieldNames = CollectTokenFields(meta.Fields);
+            // Use cached token-field collection to avoid repeated schema traversal
+            if (!s_tokenFieldsCache.TryGetValue(meta.Name, out var tokenFieldNames))
+            {
+                tokenFieldNames = CollectTokenFields(meta.Fields);
+                s_tokenFieldsCache[meta.Name] = tokenFieldNames;
+            }
+
             if (tokenFieldNames.Count == 0) return meta;
 
-            var props = syntaxNode.GetType().GetProperties(
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            // Use cached reflection result for this concrete SyntaxNode type
+            var props = GetCachedProperties(syntaxNode.GetType());
 
             foreach (var prop in props)
             {
@@ -304,11 +373,18 @@ namespace NodeCodeSync.Editor.ASTEditor
                     var value = prop.GetValue(syntaxNode);
                     if (value is SyntaxTokenList tokenList && tokenList.Count > 0)
                     {
-                        var joined = string.Join(" ", tokenList
-                            .Where(t => !t.IsMissing && !string.IsNullOrEmpty(t.Text))
-                            .Select(t => t.Text));
-                        if (!string.IsNullOrEmpty(joined))
-                            meta = meta.UpdateValue(prop.Name, joined);
+                        // Avoid LINQ alloc: build joined string with manual loop + StringBuilder
+                        var sb = new StringBuilder();
+                        foreach (var t in tokenList)
+                        {
+                            if (!t.IsMissing && !string.IsNullOrEmpty(t.Text))
+                            {
+                                if (sb.Length > 0) sb.Append(' ');
+                                sb.Append(t.Text);
+                            }
+                        }
+                        if (sb.Length > 0)
+                            meta = meta.UpdateValue(prop.Name, sb.ToString());
                     }
                 }
             }
@@ -382,18 +458,13 @@ namespace NodeCodeSync.Editor.ASTEditor
 
         /// <summary>
         /// Initial pass to set ChoiceIndex based on the presence of child Kinds.
+        /// childKinds and childTokenKinds are pre-built once per SyntaxNode in FillValues.
         /// </summary>
-        static NodeMeta FillChoiceIndex(NodeMeta meta, FieldUnit unit, SyntaxNode syntaxNode)
+        static NodeMeta FillChoiceIndex(NodeMeta meta, FieldUnit unit,
+            HashSet<string> childKinds, HashSet<string> childTokenKinds)
         {
             if (unit.Type == FieldUnitType.Choice && unit.Children?.Length > 0)
             {
-                var childKinds = new HashSet<string>(
-                    syntaxNode.ChildNodes().Select(c => c.Kind().ToString())
-                );
-                var childTokenKinds = new HashSet<string>(
-                    syntaxNode.ChildTokens().Select(t => t.Kind().ToString())
-                );
-
                 for (int i = 0; i < unit.Children.Length; i++)
                 {
                     if (ChoiceChildExists(unit.Children[i], childKinds, childTokenKinds))
@@ -407,7 +478,7 @@ namespace NodeCodeSync.Editor.ASTEditor
             if (unit.Children != null)
             {
                 foreach (var child in unit.Children)
-                    meta = FillChoiceIndex(meta, child, syntaxNode);
+                    meta = FillChoiceIndex(meta, child, childKinds, childTokenKinds);
             }
 
             return meta;

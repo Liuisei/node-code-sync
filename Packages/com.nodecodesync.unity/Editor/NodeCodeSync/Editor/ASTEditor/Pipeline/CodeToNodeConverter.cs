@@ -1,169 +1,137 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
 using System.Text;
+using UnityEngine;
 
 // Path: NodeCodeSync/Editor/ASTEditor/Pipeline/CodeToNodeConverter.cs
 namespace NodeCodeSync.Editor.ASTEditor
 {
-    /// <summary>
-    /// Represents a temporary node structure during the conversion process from C# code to a visual graph.
-    /// This structure is used to build the hierarchy before converting to persistent graph edges.
-    /// </summary>
     public class ConvertedNode
     {
         public NodeMeta Self;
         public Dictionary<string, ConvertedNode[]> FieldChildren;
     }
 
-    /// <summary>
-    /// Core engine that converts C# Source Code (Roslyn SyntaxTree) into a ConvertedNode tree.
-    /// Uses reflection-based mapping to align Roslyn's internal properties with the custom XML schema.
-    /// </summary>
     public static class CodeToNodeConverter
     {
-        /// <summary>
-        /// Entry point: Converts raw C# source code into a visual-ready node tree.
-        /// </summary>
-        /// <param name="sourceCode">The raw C# source string.</param>
-        /// <returns>The root ConvertedNode of the generated tree.</returns>
+        // ===================================================================
+        // Debug / Timer
+        // ===================================================================
+
+        const string _modifier = "[CodeToNodeConverter]";
+        private static readonly NCSDebug _debug = new NCSDebug(_modifier);
+        private static readonly NCSTimer _timer = new NCSTimer(_modifier);
+
+        // ===================================================================
+        // Static caches
+        // ===================================================================
+
+        static readonly Dictionary<Type, PropertyInfo[]> s_propertyCache = new();
+        static readonly Dictionary<string, List<(string Name, string FieldType)>> s_nodeFieldsCache = new();
+        static readonly Dictionary<string, Dictionary<string, string>> s_tokenFieldsCache = new();
+        static readonly string[] s_indents = BuildIndentCache(32);
+
+        static string[] BuildIndentCache(int max)
+        {
+            var arr = new string[max];
+            for (int i = 0; i < max; i++) arr[i] = new string(' ', i * 2);
+            return arr;
+        }
+
+        static string Indent(int depth) =>
+            depth < s_indents.Length ? s_indents[depth] : new string(' ', depth * 2);
+
+        static PropertyInfo[] GetProps(Type type)
+        {
+            if (!s_propertyCache.TryGetValue(type, out var props))
+                s_propertyCache[type] = props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            return props;
+        }
+
+        // ===================================================================
+        // Entry Point
+        // ===================================================================
+
         public static ConvertedNode CsharpToConvertedTree(string sourceCode)
         {
+            _timer.Start();
+
             var astRoot = NodeToCodeConverter.CSharpToAST(sourceCode);
+            _timer.Lap("RoslynParse");
+
             var cache = RoslynSchemaCache.Instance;
-            var sb = new StringBuilder();
-            sb.AppendLine("[SB] === CodeToNode Start ===");
 
-            var result = BuildConvertedNode(astRoot, cache, sb, 0);
+            _debug.Log("=== CodeToNode Start ===");
+            var result = BuildConvertedNode(astRoot, cache, 0);
+            _debug.Log("=== CodeToNode End ===");
+            Debug.Log(_debug.PrintLog());
 
-            sb.AppendLine("[SB] === CodeToNode End ===");
-            UnityEngine.Debug.Log(sb.ToString());
+            _timer.Lap("BuildConvertedNode");
 
+            Debug.Log(_timer.Stop("TOTAL"));
             return result;
         }
 
-        /// <summary>
-        /// Recursively builds ConvertedNodes from Roslyn SyntaxNodes.
-        /// Maps SyntaxKinds to NodeMeta templates and populates values.
-        /// </summary>
-        static ConvertedNode BuildConvertedNode(SyntaxNode syntaxNode, RoslynSchemaCache cache, StringBuilder sb, int depth)
-        {
-            var indent = new string(' ', depth * 2);
-            var kindName = syntaxNode.Kind().ToString();
+        // ===================================================================
+        // Build
+        // ===================================================================
 
-            // Retrieve NodeMeta template matching the SyntaxKind
+        static ConvertedNode BuildConvertedNode(SyntaxNode syntaxNode, RoslynSchemaCache cache, int depth)
+        {
+            var kindName = syntaxNode.Kind().ToString();
             if (!cache.KindToNodeMetaMap.TryGetValue(kindName, out var meta))
             {
-                sb.AppendLine($"{indent}⚠ Kind not found: {kindName}");
+                _debug.LogWarning($"{Indent(depth)}Kind not found: {kindName}");
                 return null;
             }
 
-            // Populate tokens and choice indices
-            meta = FillValues(meta, syntaxNode, cache);
+            meta = FillValues(meta, syntaxNode);
+            var guid = Guid.NewGuid().ToString();
+            meta = new NodeMeta(meta.Name, meta.Base, meta.Kinds, meta.Fields,
+                meta.TypeComment, meta.FactoryComment, meta.SkipConvenienceFactories, guid);
 
-            // Assign unique identity
-            var guid = System.Guid.NewGuid().ToString();
-            meta = new NodeMeta(
-                meta.Name, meta.Base, meta.Kinds, meta.Fields,
-                meta.TypeComment, meta.FactoryComment, meta.SkipConvenienceFactories,
-                guid
-            );
+            _debug.Log($"{Indent(depth)}{meta.Name} (Kind={kindName}, Guid={guid[..8]})");
 
-            sb.AppendLine($"{indent}✓ {meta.Name} (Kind={kindName}, Guid={guid[..8]})");
-
-            // Build structural children using reflection to ensure property-to-field alignment
-            var fieldChildren = BuildFieldChildrenByReflection(syntaxNode, cache, sb, depth, meta);
-
-            // Refine ChoiceIndex based on actual populated child data
+            var fieldChildren = BuildFieldChildren(syntaxNode, cache, depth, meta);
             meta = FixChoiceIndexByFieldChildren(meta, fieldChildren);
 
-            return new ConvertedNode
-            {
-                Self = meta,
-                FieldChildren = fieldChildren
-            };
+            return new ConvertedNode { Self = meta, FieldChildren = fieldChildren };
         }
 
-        /// <summary>
-        /// Scans the FieldUnits to collect metadata for all fields categorized as 'Nodes'.
-        /// </summary>
-        static List<(string Name, string FieldType)> CollectNodeFields(FieldUnit[] fields)
+        static Dictionary<string, ConvertedNode[]> BuildFieldChildren(
+            SyntaxNode syntaxNode, RoslynSchemaCache cache, int depth, NodeMeta meta)
         {
-            var result = new List<(string, string)>();
-            if (fields == null) return result;
-
-            foreach (var field in fields)
-                CollectNodeFieldsRecursive(field, result);
-
-            return result;
-        }
-
-        static void CollectNodeFieldsRecursive(FieldUnit unit, List<(string Name, string FieldType)> result)
-        {
-            if (unit.Type == FieldUnitType.Single && !string.IsNullOrEmpty(unit.Data.Name))
-            {
-                var kind = FieldTypeClassifier.Classify(unit.Data.FieldType);
-                if (FieldTypeClassifier.IsNodeType(kind))
-                {
-                    result.Add((unit.Data.Name, unit.Data.FieldType));
-                }
-            }
-
-            if (unit.Children != null)
-            {
-                foreach (var child in unit.Children)
-                    CollectNodeFieldsRecursive(child, result);
-            }
-        }
-
-        /// <summary>
-        /// Uses reflection to traverse Roslyn SyntaxNode properties and map them to schema fields.
-        /// Filters out non-schema properties (like 'Parent') to avoid circular references.
-        /// </summary>
-        static Dictionary<string, ConvertedNode[]> BuildFieldChildrenByReflection(
-            SyntaxNode syntaxNode, RoslynSchemaCache cache, StringBuilder sb, int depth,
-            NodeMeta meta)
-        {
-            var indent = new string(' ', depth * 2);
             var fieldChildren = new Dictionary<string, ConvertedNode[]>();
 
-            // Create a set of valid node-type field names from the schema
-            var validFieldNames = new HashSet<string>();
-            foreach (var (name, _) in CollectNodeFields(meta.Fields))
-                validFieldNames.Add(name);
+            if (!s_nodeFieldsCache.TryGetValue(meta.Name, out var nodeFieldList))
+                s_nodeFieldsCache[meta.Name] = nodeFieldList = CollectFields<(string, string)>(meta.Fields, isNode: true);
 
-            if (validFieldNames.Count == 0) return fieldChildren;
+            var validNames = new HashSet<string>(nodeFieldList.Count);
+            foreach (var (name, _) in nodeFieldList) validNames.Add(name);
+            if (validNames.Count == 0) return fieldChildren;
 
-            var props = syntaxNode.GetType().GetProperties(
-                BindingFlags.Public | BindingFlags.Instance);
-
-            foreach (var prop in props)
+            foreach (var prop in GetProps(syntaxNode.GetType()))
             {
-                // Skip properties not defined in our XML schema
-                if (!validFieldNames.Contains(prop.Name)) continue;
-
+                if (!validNames.Contains(prop.Name)) continue;
                 var propType = prop.PropertyType;
 
-                // Case: Single SyntaxNode
                 if (typeof(SyntaxNode).IsAssignableFrom(propType))
                 {
-                    var childSyntax = prop.GetValue(syntaxNode) as SyntaxNode;
-                    if (childSyntax == null) continue;
-
-                    var converted = BuildConvertedNode(childSyntax, cache, sb, depth + 1);
+                    var child = prop.GetValue(syntaxNode) as SyntaxNode;
+                    if (child == null) continue;
+                    var converted = BuildConvertedNode(child, cache, depth + 1);
                     if (converted != null)
                     {
                         fieldChildren[prop.Name] = new[] { converted };
-                        sb.AppendLine($"{indent}  .{prop.Name} → {converted.Self.Name}");
+                        _debug.Log($"{Indent(depth)}  .{prop.Name} -> {converted.Self.Name}");
                     }
                     continue;
                 }
 
-                // Case: SyntaxList<T> or SeparatedSyntaxList<T>
-                if (typeof(System.Collections.IEnumerable).IsAssignableFrom(propType)
-                    && propType != typeof(string))
+                if (typeof(System.Collections.IEnumerable).IsAssignableFrom(propType) && propType != typeof(string))
                 {
                     if (!propType.IsGenericType) continue;
                     var genArgs = propType.GetGenericArguments();
@@ -177,16 +145,15 @@ namespace NodeCodeSync.Editor.ASTEditor
                     {
                         if (item is SyntaxNode childNode)
                         {
-                            var converted = BuildConvertedNode(childNode, cache, sb, depth + 1);
-                            if (converted != null)
-                                list.Add(converted);
+                            var converted = BuildConvertedNode(childNode, cache, depth + 1);
+                            if (converted != null) list.Add(converted);
                         }
                     }
 
                     if (list.Count > 0)
                     {
                         fieldChildren[prop.Name] = list.ToArray();
-                        sb.AppendLine($"{indent}  .{prop.Name} → [{list.Count}] items");
+                        _debug.Log($"{Indent(depth)}  .{prop.Name} -> [{list.Count}] items");
                     }
                 }
             }
@@ -194,121 +161,98 @@ namespace NodeCodeSync.Editor.ASTEditor
             return fieldChildren;
         }
 
+        // ===================================================================
+        // CollectFields — 統合ヘルパー（Node系 / Token系 両対応）
+        // ===================================================================
+
         /// <summary>
-        /// Corrects the ChoiceIndex of a NodeMeta by checking which field actually contains data.
+        /// FieldUnit[] を再帰走査して Node系 or Token系フィールドを収集する統合メソッド。
+        /// isNode=true → List{(Name, FieldType)} を返す想定 (T = (string,string))
+        /// isNode=false → Dictionary{Name, FieldType} を返す想定 (T = KeyValuePair)
+        /// 実際には呼び出し側で型を使い分けるため、2つのオーバーロードとして実装。
         /// </summary>
-        static NodeMeta FixChoiceIndexByFieldChildren(NodeMeta meta, Dictionary<string, ConvertedNode[]> fieldChildren)
+        static List<(string Name, string FieldType)> CollectFields<T>(FieldUnit[] fields, bool isNode)
         {
-            if (meta.Fields == null) return meta;
-
-            for (int i = 0; i < meta.Fields.Length; i++)
-                meta = FixChoiceRecursive(meta, meta.Fields[i], fieldChildren);
-
-            return meta;
+            var result = new List<(string, string)>();
+            if (fields == null) return result;
+            foreach (var f in fields) CollectFieldsRecursive(f, result, isNode);
+            return result;
         }
 
-        static NodeMeta FixChoiceRecursive(NodeMeta meta, FieldUnit unit, Dictionary<string, ConvertedNode[]> fieldChildren)
+        static void CollectFieldsRecursive(FieldUnit unit, List<(string Name, string FieldType)> result, bool isNode)
         {
-            if (unit.Type == FieldUnitType.Choice && unit.Children?.Length > 0)
+            if (unit.Type == FieldUnitType.Single && !string.IsNullOrEmpty(unit.Data.Name))
             {
-                // Iterate through choice options to find the one with active data
-                for (int i = 0; i < unit.Children.Length; i++)
-                {
-                    if (ChoiceChildHasData(unit.Children[i], fieldChildren))
-                    {
-                        meta = meta.UpdateValue(unit.Data.Name, null, i);
-                        break;
-                    }
-                }
+                var kind = FieldTypeClassifier.Classify(unit.Data.FieldType);
+                bool match = isNode ? FieldTypeClassifier.IsNodeType(kind) : FieldTypeClassifier.IsTokenType(kind);
+                if (match) result.Add((unit.Data.Name, unit.Data.FieldType));
             }
-
             if (unit.Children != null)
-            {
                 foreach (var child in unit.Children)
-                    meta = FixChoiceRecursive(meta, child, fieldChildren);
-            }
-
-            return meta;
+                    CollectFieldsRecursive(child, result, isNode);
         }
 
-        /// <summary>
-        /// Determines if a specific child of a Choice unit contains actual data in the fieldChildren map.
-        /// </summary>
-        static bool ChoiceChildHasData(FieldUnit child, Dictionary<string, ConvertedNode[]> fieldChildren)
+        static Dictionary<string, string> CollectTokenFieldsDict(FieldUnit[] fields)
         {
-            if (child.Type == FieldUnitType.Single && !string.IsNullOrEmpty(child.Data.Name))
-            {
-                var kind = FieldTypeClassifier.Classify(child.Data.FieldType);
-                if (FieldTypeClassifier.IsNodeType(kind))
-                    return fieldChildren.ContainsKey(child.Data.Name);
-            }
-
-            // Sequence: True if any nested child has data
-            if (child.Children != null)
-            {
-                foreach (var c in child.Children)
-                {
-                    if (ChoiceChildHasData(c, fieldChildren)) return true;
-                }
-            }
-
-            return false;
+            var list = CollectFields<(string, string)>(fields, isNode: false);
+            var dict = new Dictionary<string, string>(list.Count);
+            foreach (var (name, type) in list) dict[name] = type;
+            return dict;
         }
 
         // ===================================================================
-        // Value Injection Helpers
+        // FillValues
         // ===================================================================
 
-        static NodeMeta FillValues(NodeMeta meta, SyntaxNode syntaxNode, RoslynSchemaCache cache)
+        static NodeMeta FillValues(NodeMeta meta, SyntaxNode syntaxNode)
         {
             if (meta.Fields == null) return meta;
 
-            // Map token values from Roslyn properties to schema fields
             meta = FillTokensByReflection(meta, syntaxNode);
 
-            // Populate initial choice indices
+            var childKinds = new HashSet<string>();
+            var childTokenKinds = new HashSet<string>();
+            foreach (var c in syntaxNode.ChildNodes()) childKinds.Add(c.Kind().ToString());
+            foreach (var t in syntaxNode.ChildTokens()) childTokenKinds.Add(t.Kind().ToString());
+
             for (int i = 0; i < meta.Fields.Length; i++)
-                meta = FillChoiceIndex(meta, meta.Fields[i], syntaxNode);
+                meta = FillChoiceIndex(meta, meta.Fields[i], childKinds, childTokenKinds);
 
             return meta;
         }
 
-        /// <summary>
-        /// Maps Roslyn SyntaxTokens to schema fields.
-        /// Concatenates TokenLists (e.g., Modifiers) with space separators.
-        /// </summary>
         static NodeMeta FillTokensByReflection(NodeMeta meta, SyntaxNode syntaxNode)
         {
-            var tokenFieldNames = CollectTokenFields(meta.Fields);
-            if (tokenFieldNames.Count == 0) return meta;
+            if (!s_tokenFieldsCache.TryGetValue(meta.Name, out var tokenFields))
+                s_tokenFieldsCache[meta.Name] = tokenFields = CollectTokenFieldsDict(meta.Fields);
+            if (tokenFields.Count == 0) return meta;
 
-            var props = syntaxNode.GetType().GetProperties(
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-
-            foreach (var prop in props)
+            foreach (var prop in GetProps(syntaxNode.GetType()))
             {
-                if (!tokenFieldNames.TryGetValue(prop.Name, out var fieldType)) continue;
+                if (!tokenFields.TryGetValue(prop.Name, out var fieldType)) continue;
                 var kind = FieldTypeClassifier.Classify(fieldType);
 
-                if (kind == FieldTypeKind.Token)
+                if (kind == FieldTypeKind.Token && prop.PropertyType == typeof(SyntaxToken))
                 {
-                    if (prop.PropertyType == typeof(SyntaxToken))
-                    {
-                        var token = (SyntaxToken)prop.GetValue(syntaxNode);
-                        if (!token.IsMissing && !string.IsNullOrEmpty(token.Text))
-                            meta = meta.UpdateValue(prop.Name, token.Text);
-                    }
+                    var token = (SyntaxToken)prop.GetValue(syntaxNode);
+                    if (!token.IsMissing && !string.IsNullOrEmpty(token.Text))
+                        meta = meta.UpdateValue(prop.Name, token.Text);
                 }
                 else if (kind == FieldTypeKind.TokenList)
                 {
                     var value = prop.GetValue(syntaxNode);
                     if (value is SyntaxTokenList tokenList && tokenList.Count > 0)
                     {
-                        var joined = string.Join(" ", tokenList
-                            .Where(t => !t.IsMissing && !string.IsNullOrEmpty(t.Text))
-                            .Select(t => t.Text));
-                        if (!string.IsNullOrEmpty(joined))
-                            meta = meta.UpdateValue(prop.Name, joined);
+                        var sb = new StringBuilder();
+                        foreach (var t in tokenList)
+                        {
+                            if (!t.IsMissing && !string.IsNullOrEmpty(t.Text))
+                            {
+                                if (sb.Length > 0) sb.Append(' ');
+                                sb.Append(t.Text);
+                            }
+                        }
+                        if (sb.Length > 0) meta = meta.UpdateValue(prop.Name, sb.ToString());
                     }
                 }
             }
@@ -316,84 +260,15 @@ namespace NodeCodeSync.Editor.ASTEditor
             return meta;
         }
 
-        /// <summary>
-        /// Scans for Token-type fields within the schema.
-        /// </summary>
-        static Dictionary<string, string> CollectTokenFields(FieldUnit[] fields)
-        {
-            var result = new Dictionary<string, string>();
-            if (fields == null) return result;
+        // ===================================================================
+        // ChoiceIndex
+        // ===================================================================
 
-            foreach (var field in fields)
-                CollectTokenFieldsRecursive(field, result);
-
-            return result;
-        }
-
-        static void CollectTokenFieldsRecursive(FieldUnit unit, Dictionary<string, string> result)
-        {
-            if (unit.Type == FieldUnitType.Single && !string.IsNullOrEmpty(unit.Data.Name))
-            {
-                var kind = FieldTypeClassifier.Classify(unit.Data.FieldType);
-                if (FieldTypeClassifier.IsTokenType(kind))
-                    result[unit.Data.Name] = unit.Data.FieldType;
-            }
-
-            if (unit.Children != null)
-            {
-                foreach (var child in unit.Children)
-                    CollectTokenFieldsRecursive(child, result);
-            }
-        }
-
-        /// <summary>
-        /// Handles tokens without predefined Kinds (e.g., Identifiers, Literals).
-        /// Fills the first available empty Token field.
-        /// </summary>
-        static NodeMeta FillUnmappedToken(NodeMeta meta, SyntaxToken token)
-        {
-            return FillUnmappedRecursive(meta, meta.Fields, token);
-        }
-
-        static NodeMeta FillUnmappedRecursive(NodeMeta meta, FieldUnit[] fields, SyntaxToken token)
-        {
-            if (fields == null) return meta;
-
-            foreach (var field in fields)
-            {
-                if (field.Type == FieldUnitType.Single && !string.IsNullOrEmpty(field.Data.Name))
-                {
-                    var kind = FieldTypeClassifier.Classify(field.Data.FieldType);
-                    if (FieldTypeClassifier.IsTokenType(kind)
-                        && (field.Data.Kinds == null || field.Data.Kinds.Length == 0)
-                        && string.IsNullOrEmpty(field.Data.Value))
-                    {
-                        meta = meta.UpdateValue(field.Data.Name, token.Text);
-                        return meta;
-                    }
-                }
-
-                if (field.Children != null)
-                    meta = FillUnmappedRecursive(meta, field.Children, token);
-            }
-
-            return meta;
-        }
-
-        /// <summary>
-        /// Initial pass to set ChoiceIndex based on the presence of child Kinds.
-        /// </summary>
-        static NodeMeta FillChoiceIndex(NodeMeta meta, FieldUnit unit, SyntaxNode syntaxNode)
+        static NodeMeta FillChoiceIndex(NodeMeta meta, FieldUnit unit,
+            HashSet<string> childKinds, HashSet<string> childTokenKinds)
         {
             if (unit.Type == FieldUnitType.Choice && unit.Children?.Length > 0)
             {
-                var childKinds = new HashSet<string>(
-                    syntaxNode.ChildNodes().Select(c => c.Kind().ToString())
-                );
-                var childTokenKinds = new HashSet<string>(
-                    syntaxNode.ChildTokens().Select(t => t.Kind().ToString())
-                );
-
                 for (int i = 0; i < unit.Children.Length; i++)
                 {
                     if (ChoiceChildExists(unit.Children[i], childKinds, childTokenKinds))
@@ -403,43 +278,65 @@ namespace NodeCodeSync.Editor.ASTEditor
                     }
                 }
             }
-
             if (unit.Children != null)
-            {
                 foreach (var child in unit.Children)
-                    meta = FillChoiceIndex(meta, child, syntaxNode);
-            }
-
+                    meta = FillChoiceIndex(meta, child, childKinds, childTokenKinds);
             return meta;
         }
 
-        /// <summary>
-        /// Checks if a child unit's Kinds exist within the current SyntaxNode's children.
-        /// </summary>
         static bool ChoiceChildExists(FieldUnit child, HashSet<string> childKinds, HashSet<string> childTokenKinds)
         {
             if (child.Type != FieldUnitType.Single || string.IsNullOrEmpty(child.Data.FieldType))
                 return false;
-
             var kind = FieldTypeClassifier.Classify(child.Data.FieldType);
-
             if (FieldTypeClassifier.IsTokenType(kind))
             {
                 if (child.Data.Kinds != null)
-                {
                     foreach (var k in child.Data.Kinds)
-                    {
                         if (childTokenKinds.Contains(k)) return true;
-                    }
-                }
                 return false;
             }
+            return FieldTypeClassifier.IsNodeType(kind) && childKinds.Count > 0;
+        }
 
-            if (FieldTypeClassifier.IsNodeType(kind))
+        static NodeMeta FixChoiceIndexByFieldChildren(NodeMeta meta, Dictionary<string, ConvertedNode[]> fieldChildren)
+        {
+            if (meta.Fields == null) return meta;
+            for (int i = 0; i < meta.Fields.Length; i++)
+                meta = FixChoiceRecursive(meta, meta.Fields[i], fieldChildren);
+            return meta;
+        }
+
+        static NodeMeta FixChoiceRecursive(NodeMeta meta, FieldUnit unit, Dictionary<string, ConvertedNode[]> fieldChildren)
+        {
+            if (unit.Type == FieldUnitType.Choice && unit.Children?.Length > 0)
             {
-                return childKinds.Count > 0;
+                for (int i = 0; i < unit.Children.Length; i++)
+                {
+                    if (ChoiceChildHasData(unit.Children[i], fieldChildren))
+                    {
+                        meta = meta.UpdateValue(unit.Data.Name, null, i);
+                        break;
+                    }
+                }
             }
+            if (unit.Children != null)
+                foreach (var child in unit.Children)
+                    meta = FixChoiceRecursive(meta, child, fieldChildren);
+            return meta;
+        }
 
+        static bool ChoiceChildHasData(FieldUnit child, Dictionary<string, ConvertedNode[]> fieldChildren)
+        {
+            if (child.Type == FieldUnitType.Single && !string.IsNullOrEmpty(child.Data.Name))
+            {
+                var kind = FieldTypeClassifier.Classify(child.Data.FieldType);
+                if (FieldTypeClassifier.IsNodeType(kind))
+                    return fieldChildren.ContainsKey(child.Data.Name);
+            }
+            if (child.Children != null)
+                foreach (var c in child.Children)
+                    if (ChoiceChildHasData(c, fieldChildren)) return true;
             return false;
         }
     }

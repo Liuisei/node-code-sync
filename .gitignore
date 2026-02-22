@@ -103,3 +103,5 @@ NCSDevelopUnity/.vscode/
 .claude/settings.local.json
 .claude/
 *.slnx
+NCSDevelopUnity/Assets/NCS/GiantTest.cs
+NCSDevelopUnity/Assets/NCS/GiantTest.cs.meta

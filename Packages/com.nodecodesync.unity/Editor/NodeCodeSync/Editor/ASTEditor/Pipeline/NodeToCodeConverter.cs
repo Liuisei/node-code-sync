@@ -3,7 +3,6 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Text;
 using UnityEngine;
 
@@ -17,6 +16,12 @@ namespace NodeCodeSync.Editor.ASTEditor
     /// </summary>
     public static class NodeToCodeConverter
     {
+        private static readonly List<AstNode> s_emptyChildren = new List<AstNode>(0);
+
+        const string _modifier = "[NodeToCodeConverter]";
+        private static readonly NCSDebug _debug = new NCSDebug(_modifier);
+        private static readonly NCSTimer _timer = new NCSTimer(_modifier);
+
         // =========================================================
         // Public API
         // =========================================================
@@ -27,88 +32,53 @@ namespace NodeCodeSync.Editor.ASTEditor
         /// <param name="roots">The top-level nodes (e.g., Namespace or Class declarations).</param>
         /// <param name="graphView">The current GraphView to resolve node connections.</param>
         /// <param name="formatWithRoslyn">If true, uses Roslyn to prettify the output (heavy operation).</param>
-        /// <param name="enableDebug">If true, outputs a structural trace to the Unity Console.</param>
-        /// <param name="enableProfiling">If true, logs detailed timing metrics for each phase.</param>
-        public static string NodeMetasToCSharp(
-            AstNode[] roots,
-            AstGraphView graphView,
-            bool formatWithRoslyn = false,
-            bool enableDebug = false,
-            bool enableProfiling = false)
+        public static string NodeMetasToCSharp(AstNode[] roots, AstGraphView graphView, bool formatWithRoslyn = true)
         {
             if (roots == null || roots.Length == 0) return string.Empty;
 
-            var swTotal = enableProfiling ? Stopwatch.StartNew() : null;
+            _timer.Start();
 
             // Phase 1: Edge Lookup Indexing
             // We index all edges once into a dictionary to allow O(1) child resolution during traversal.
-            var swLookup = enableProfiling ? Stopwatch.StartNew() : null;
             var edgeLookup = BuildEdgeLookup(graphView);
-            if (enableProfiling)
-            {
-                swLookup!.Stop();
-                UnityEngine.Debug.Log($"[NodeToCode] EdgeLookup: {swLookup.Elapsed.TotalMilliseconds:F3}ms (edges indexed={edgeLookup.Count})");
-            }
+            _timer.Lap($"EdgeLookup (edges indexed={edgeLookup.Count})");
 
             // Phase 2: Recursive Text Generation
             // Uses a pre-allocated StringBuilder to minimize GC pressure during reconstruction.
-            var swBuild = enableProfiling ? Stopwatch.StartNew() : null;
             var sb = new StringBuilder(16 * 1024);
-            StringBuilder? dbg = enableDebug ? new StringBuilder(8 * 1024) : null;
 
-            if (enableDebug) dbg!.AppendLine("[NodeToCode] === Generation Start ===");
+            _debug.Log("=== Generation Start ===");
 
             foreach (var rootNode in roots)
-                AppendNode(sb, rootNode, edgeLookup, dbg, 0, enableDebug);
+                AppendNode(sb, rootNode, edgeLookup, 0);
 
-            if (enableDebug)
-            {
-                dbg!.AppendLine("[NodeToCode] === Generation End ===");
-                UnityEngine.Debug.Log(dbg.ToString());
-            }
+            _debug.Log($"=== Generation End (chars={sb.Length}) ===");
+            UnityEngine.Debug.Log(_debug.PrintLog());
 
-            if (enableProfiling)
-            {
-                swBuild!.Stop();
-                UnityEngine.Debug.Log($"[NodeToCode] BuildText: {swBuild.Elapsed.TotalMilliseconds:F3}ms (chars={sb.Length})");
-            }
+            _timer.Lap($"BuildText (chars={sb.Length})");
 
             // Phase 3: Post-Processing & Formatting
             if (!formatWithRoslyn)
             {
-                swTotal?.Stop();
-                if (enableProfiling) UnityEngine.Debug.Log($"[NodeToCode] TOTAL (raw): {swTotal!.Elapsed.TotalMilliseconds:F3}ms");
+                UnityEngine.Debug.Log(_timer.Stop("TOTAL (raw)"));
                 return sb.ToString();
             }
 
-            var swFormat = enableProfiling ? Stopwatch.StartNew() : null;
             var tree = CSharpSyntaxTree.ParseText(sb.ToString());
             var formatted = tree.GetCompilationUnitRoot().NormalizeWhitespace().ToFullString();
 
-            if (enableProfiling)
-            {
-                swFormat!.Stop();
-                swTotal!.Stop();
-                UnityEngine.Debug.Log($"[NodeToCode] RoslynFormat: {swFormat.Elapsed.TotalMilliseconds:F3}ms");
-                UnityEngine.Debug.Log($"[NodeToCode] TOTAL (formatted): {swTotal.Elapsed.TotalMilliseconds:F3}ms");
-            }
+            UnityEngine.Debug.Log(_timer.Stop("TOTAL (formatted, includes RoslynFormat)"));
             return formatted;
         }
 
         /// <summary>
         /// Parses raw C# code into a Roslyn CompilationUnitSyntax.
         /// </summary>
-        public static CompilationUnitSyntax CSharpToAST(string sourceCode, bool enableProfiling = false)
+        public static CompilationUnitSyntax CSharpToAST(string sourceCode)
         {
-            if (!enableProfiling)
-            {
-                return CSharpSyntaxTree.ParseText(sourceCode).GetCompilationUnitRoot();
-            }
-
-            var sw = Stopwatch.StartNew();
+            _timer.Start();
             var root = CSharpSyntaxTree.ParseText(sourceCode).GetCompilationUnitRoot();
-            sw.Stop();
-            UnityEngine.Debug.Log($"[Roslyn Parse] {sw.Elapsed.TotalMilliseconds:F3}ms");
+            UnityEngine.Debug.Log(_timer.Stop("Roslyn Parse"));
             return root;
         }
 
@@ -141,8 +111,6 @@ namespace NodeCodeSync.Editor.ASTEditor
             }
         }
 
-        private static readonly List<AstNode> s_emptyChildren = new List<AstNode>(0);
-
         private static Dictionary<EdgeKey, List<AstNode>> BuildEdgeLookup(AstGraphView graphView)
         {
             var map = new Dictionary<EdgeKey, List<AstNode>>(256);
@@ -172,49 +140,48 @@ namespace NodeCodeSync.Editor.ASTEditor
         // =========================================================
         // Recursive Reconstruction Methods
         // =========================================================
-
-        private static void AppendNode(StringBuilder sb, AstNode node, Dictionary<EdgeKey, List<AstNode>> edgeLookup, StringBuilder? dbg, int depth, bool enableDebug)
+        private static void AppendNode(StringBuilder sb, AstNode node, Dictionary<EdgeKey, List<AstNode>> edgeLookup, int depth)
         {
             if (!node.RuntimeMeta.HasValue) return;
 
-            if (enableDebug) dbg!.Append(' ', depth * 2).Append("Node: ").AppendLine(node.RuntimeMeta.Value.Name);
+            _debug.Log($"{new string(' ', depth * 2)}Node: {node.RuntimeMeta.Value.Name}");
 
-            AppendFields(sb, node.RuntimeMeta.Value.Fields, node, edgeLookup, dbg, depth, enableDebug);
+            AppendFields(sb, node.RuntimeMeta.Value.Fields, node, edgeLookup, depth);
         }
 
-        private static void AppendFields(StringBuilder sb, FieldUnit[] fields, AstNode node, Dictionary<EdgeKey, List<AstNode>> edgeLookup, StringBuilder? dbg, int depth, bool enableDebug)
+        private static void AppendFields(StringBuilder sb, FieldUnit[] fields, AstNode node, Dictionary<EdgeKey, List<AstNode>> edgeLookup, int depth)
         {
             if (fields == null) return;
             foreach (var field in fields)
-                AppendFieldUnit(sb, field, node, edgeLookup, dbg, depth, enableDebug);
+                AppendFieldUnit(sb, field, node, edgeLookup, depth);
         }
 
-        private static void AppendFieldUnit(StringBuilder sb, FieldUnit unit, AstNode node, Dictionary<EdgeKey, List<AstNode>> edgeLookup, StringBuilder? dbg, int depth, bool enableDebug)
+        private static void AppendFieldUnit(StringBuilder sb, FieldUnit unit, AstNode node, Dictionary<EdgeKey, List<AstNode>> edgeLookup, int depth)
         {
             switch (unit.Type)
             {
                 case FieldUnitType.Single:
-                    AppendSingleField(sb, unit.Data, node, edgeLookup, dbg, depth, enableDebug);
+                    AppendSingleField(sb, unit.Data, node, edgeLookup, depth);
                     break;
 
                 case FieldUnitType.Choice:
                     if (unit.Children != null && unit.Children.Length > 0)
                     {
                         var idx = Mathf.Clamp(unit.ChoiceIndex, 0, unit.Children.Length - 1);
-                        if (enableDebug) dbg!.Append(' ', depth * 2).Append("Choice Selected: ").Append(idx).AppendLine();
-                        AppendFieldUnit(sb, unit.Children[idx], node, edgeLookup, dbg, depth, enableDebug);
+                        _debug.Log($"{new string(' ', depth * 2)}Choice Selected: {idx}");
+                        AppendFieldUnit(sb, unit.Children[idx], node, edgeLookup, depth);
                     }
                     break;
 
                 case FieldUnitType.Sequence:
                     if (unit.Children != null)
                         foreach (var child in unit.Children)
-                            AppendFieldUnit(sb, child, node, edgeLookup, dbg, depth, enableDebug);
+                            AppendFieldUnit(sb, child, node, edgeLookup, depth);
                     break;
             }
         }
 
-        private static void AppendSingleField(StringBuilder sb, FieldMetadata data, AstNode node, Dictionary<EdgeKey, List<AstNode>> edgeLookup, StringBuilder? dbg, int depth, bool enableDebug)
+        private static void AppendSingleField(StringBuilder sb, FieldMetadata data, AstNode node, Dictionary<EdgeKey, List<AstNode>> edgeLookup, int depth)
         {
             if (string.IsNullOrEmpty(data.FieldType)) return;
 
@@ -230,7 +197,7 @@ namespace NodeCodeSync.Editor.ASTEditor
                         string val = kind == FieldTypeKind.TokenList ? data.Value.Replace(",", " ") : data.Value;
                         sb.Append(val).Append(' ');
 
-                        if (enableDebug) dbg!.Append(' ', depth * 2).Append("Token: ").Append(data.Name).Append("=").AppendLine(val);
+                        _debug.Log($"{new string(' ', depth * 2)}Token: {data.Name}={val}");
                     }
                     break;
 
@@ -241,11 +208,11 @@ namespace NodeCodeSync.Editor.ASTEditor
                         var needsSep = FieldTypeClassifier.NeedsSeparator(kind);
                         var children = GetChildNodesFast(node, data.Name, edgeLookup);
 
-                        if (enableDebug) dbg!.Append(' ', depth * 2).Append("Link: ").Append(data.Name).Append(" -> ").Append(children.Count).AppendLine(" children");
+                        _debug.Log($"{new string(' ', depth * 2)}Link: {data.Name} -> {children.Count} children");
 
                         for (int i = 0; i < children.Count; i++)
                         {
-                            AppendNode(sb, children[i], edgeLookup, dbg, depth + 1, enableDebug);
+                            AppendNode(sb, children[i], edgeLookup, depth + 1);
                             if (needsSep && i < children.Count - 1) sb.Append(", ");
                         }
                     }

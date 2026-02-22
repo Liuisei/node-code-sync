@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
+using UnityEngine;
 
 // Path: NodeCodeSync/Editor/ASTEditor/Pipeline/CodeToNodeConverter.cs
 namespace NodeCodeSync.Editor.ASTEditor
@@ -16,6 +17,14 @@ namespace NodeCodeSync.Editor.ASTEditor
 
     public static class CodeToNodeConverter
     {
+        // ===================================================================
+        // Debug / Timer
+        // ===================================================================
+
+        const string _modifier = "[CodeToNodeConverter]";
+        private static readonly NCSDebug _debug = new NCSDebug(_modifier);
+        private static readonly NCSTimer _timer = new NCSTimer(_modifier);
+
         // ===================================================================
         // Static caches
         // ===================================================================
@@ -48,13 +57,21 @@ namespace NodeCodeSync.Editor.ASTEditor
 
         public static ConvertedNode CsharpToConvertedTree(string sourceCode)
         {
+            _timer.Start();
+
             var astRoot = NodeToCodeConverter.CSharpToAST(sourceCode);
+            _timer.Lap("RoslynParse");
+
             var cache = RoslynSchemaCache.Instance;
-            var sb = new StringBuilder();
-            sb.AppendLine("[SB] === CodeToNode Start ===");
-            var result = BuildConvertedNode(astRoot, cache, sb, 0);
-            sb.AppendLine("[SB] === CodeToNode End ===");
-            UnityEngine.Debug.Log(sb.ToString());
+
+            _debug.Log("=== CodeToNode Start ===");
+            var result = BuildConvertedNode(astRoot, cache, 0);
+            _debug.Log("=== CodeToNode End ===");
+            Debug.Log(_debug.PrintLog());
+
+            _timer.Lap("BuildConvertedNode");
+
+            Debug.Log(_timer.Stop("TOTAL"));
             return result;
         }
 
@@ -62,12 +79,12 @@ namespace NodeCodeSync.Editor.ASTEditor
         // Build
         // ===================================================================
 
-        static ConvertedNode BuildConvertedNode(SyntaxNode syntaxNode, RoslynSchemaCache cache, StringBuilder sb, int depth)
+        static ConvertedNode BuildConvertedNode(SyntaxNode syntaxNode, RoslynSchemaCache cache, int depth)
         {
             var kindName = syntaxNode.Kind().ToString();
             if (!cache.KindToNodeMetaMap.TryGetValue(kindName, out var meta))
             {
-                sb.AppendLine($"{Indent(depth)}⚠ Kind not found: {kindName}");
+                _debug.LogWarning($"{Indent(depth)}Kind not found: {kindName}");
                 return null;
             }
 
@@ -76,16 +93,16 @@ namespace NodeCodeSync.Editor.ASTEditor
             meta = new NodeMeta(meta.Name, meta.Base, meta.Kinds, meta.Fields,
                 meta.TypeComment, meta.FactoryComment, meta.SkipConvenienceFactories, guid);
 
-            sb.AppendLine($"{Indent(depth)}✓ {meta.Name} (Kind={kindName}, Guid={guid[..8]})");
+            _debug.Log($"{Indent(depth)}{meta.Name} (Kind={kindName}, Guid={guid[..8]})");
 
-            var fieldChildren = BuildFieldChildren(syntaxNode, cache, sb, depth, meta);
+            var fieldChildren = BuildFieldChildren(syntaxNode, cache, depth, meta);
             meta = FixChoiceIndexByFieldChildren(meta, fieldChildren);
 
             return new ConvertedNode { Self = meta, FieldChildren = fieldChildren };
         }
 
         static Dictionary<string, ConvertedNode[]> BuildFieldChildren(
-            SyntaxNode syntaxNode, RoslynSchemaCache cache, StringBuilder sb, int depth, NodeMeta meta)
+            SyntaxNode syntaxNode, RoslynSchemaCache cache, int depth, NodeMeta meta)
         {
             var fieldChildren = new Dictionary<string, ConvertedNode[]>();
 
@@ -105,11 +122,11 @@ namespace NodeCodeSync.Editor.ASTEditor
                 {
                     var child = prop.GetValue(syntaxNode) as SyntaxNode;
                     if (child == null) continue;
-                    var converted = BuildConvertedNode(child, cache, sb, depth + 1);
+                    var converted = BuildConvertedNode(child, cache, depth + 1);
                     if (converted != null)
                     {
                         fieldChildren[prop.Name] = new[] { converted };
-                        sb.AppendLine($"{Indent(depth)}  .{prop.Name} → {converted.Self.Name}");
+                        _debug.Log($"{Indent(depth)}  .{prop.Name} -> {converted.Self.Name}");
                     }
                     continue;
                 }
@@ -128,7 +145,7 @@ namespace NodeCodeSync.Editor.ASTEditor
                     {
                         if (item is SyntaxNode childNode)
                         {
-                            var converted = BuildConvertedNode(childNode, cache, sb, depth + 1);
+                            var converted = BuildConvertedNode(childNode, cache, depth + 1);
                             if (converted != null) list.Add(converted);
                         }
                     }
@@ -136,7 +153,7 @@ namespace NodeCodeSync.Editor.ASTEditor
                     if (list.Count > 0)
                     {
                         fieldChildren[prop.Name] = list.ToArray();
-                        sb.AppendLine($"{Indent(depth)}  .{prop.Name} → [{list.Count}] items");
+                        _debug.Log($"{Indent(depth)}  .{prop.Name} -> [{list.Count}] items");
                     }
                 }
             }

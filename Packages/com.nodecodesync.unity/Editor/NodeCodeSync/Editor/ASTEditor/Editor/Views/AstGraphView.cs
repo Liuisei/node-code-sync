@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using UnityEditor.Experimental.GraphView;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -19,6 +18,10 @@ namespace NodeCodeSync.Editor.ASTEditor
         /// Occurs when the graph structure or node data is modified.
         /// </summary>
         public event Action OnGraphDataChanged;
+
+        const string _modifier = "[AstGraphView]";
+        private readonly NCSDebug _debug = new NCSDebug(_modifier);
+        private readonly NCSTimer _timer = new NCSTimer(_modifier);
 
         public AstGraphView()
         {
@@ -54,25 +57,30 @@ namespace NodeCodeSync.Editor.ASTEditor
             // Clear existing elements
             DeleteElements(graphElements.ToList());
 
+            _timer.Start();
+            _debug.Log("=== Graph Rebuild Start ===");
+
             var root = CodeToNodeConverter.CsharpToConvertedTree(code);
             if (root == null) return;
 
-            var sb = new StringBuilder();
-            sb.AppendLine("[AstGraphView] Rebuilding graph from code...");
-            sb.AppendLine($"Root Node: {root.Self.Name}");
+            _timer.Lap("CodeToNode");
+            _debug.Log($"Root Node: {root.Self.Name}");
 
             // Map to keep track of created nodes by their GUID for edge connection
             var guidMap = new Dictionary<string, AstNode>();
 
             // Pass 1: Create nodes using Depth-First Search (DFS)
             CreateNodesRecursive(root, guidMap, Vector2.zero, 0);
-            sb.AppendLine($"Pass 1: {guidMap.Count} nodes created.");
+            _timer.Lap($"CreateNodes (count={guidMap.Count})");
 
             // Pass 2: Connect nodes based on field relationships
-            ConnectEdgesRecursive(root, guidMap, sb);
-            sb.AppendLine("[AstGraphView] Graph rebuild complete.");
+            ConnectEdgesRecursive(root, guidMap);
+            _timer.Lap("ConnectEdges");
 
-            Debug.Log(sb.ToString());
+            _debug.Log("=== Graph Rebuild End ===");
+
+            Debug.Log(_debug.PrintLog());
+            Debug.Log(_timer.Stop("TOTAL"));
         }
 
         /// <summary>
@@ -115,13 +123,13 @@ namespace NodeCodeSync.Editor.ASTEditor
         /// <summary>
         /// Recursively establishes edges between parent ports and child nodes.
         /// </summary>
-        private void ConnectEdgesRecursive(ConvertedNode converted, Dictionary<string, AstNode> guidMap, StringBuilder sb)
+        private void ConnectEdgesRecursive(ConvertedNode converted, Dictionary<string, AstNode> guidMap)
         {
             if (converted.FieldChildren == null) return;
 
             if (!guidMap.TryGetValue(converted.Self.Guid, out var parentNode))
             {
-                sb.AppendLine($"[Warning] Parent node not found in map: {converted.Self.Name} ({converted.Self.Guid.Substring(0, 8)})");
+                _debug.LogWarning($"Parent node not found in map: {converted.Self.Name} ({converted.Self.Guid.Substring(0, 8)})");
                 return;
             }
 
@@ -132,7 +140,7 @@ namespace NodeCodeSync.Editor.ASTEditor
 
                 if (outputPort == null)
                 {
-                    sb.AppendLine($"[Warning] Output port not found: {converted.Self.Name}.{fieldName}");
+                    _debug.LogWarning($"Output port not found: {converted.Self.Name}.{fieldName}");
                     continue;
                 }
 
@@ -140,14 +148,14 @@ namespace NodeCodeSync.Editor.ASTEditor
                 {
                     if (!guidMap.TryGetValue(child.Self.Guid, out var childNode))
                     {
-                        sb.AppendLine($"[Warning] Child node not found in map: {child.Self.Name}");
+                        _debug.LogWarning($"Child node not found in map: {child.Self.Name}");
                         continue;
                     }
 
                     // Create and add the visual edge
                     var edge = outputPort.ConnectTo(childNode.InputPort);
                     AddElement(edge);
-                    sb.AppendLine($"Edge Created: {converted.Self.Name}.{fieldName} -> {child.Self.Name}");
+                    _debug.Log($"Edge Created: {converted.Self.Name}.{fieldName} -> {child.Self.Name}");
                 }
             }
 
@@ -156,7 +164,7 @@ namespace NodeCodeSync.Editor.ASTEditor
             {
                 foreach (var child in kvp.Value)
                 {
-                    ConnectEdgesRecursive(child, guidMap, sb);
+                    ConnectEdgesRecursive(child, guidMap);
                 }
             }
         }
@@ -185,9 +193,11 @@ namespace NodeCodeSync.Editor.ASTEditor
         /// </summary>
         public void SyncGraphToCode()
         {
+            _timer.Start();
             AstNode[] roots = GetRootNodes();
-            string code = NodeToCodeConverter.NodeMetasToCSharp(roots, this, true);
+            string code = NodeToCodeConverter.NodeMetasToCSharp(roots, this);
             NodeCodeDataEventBus.Instance.UpdateNode(code);
+            Debug.Log(_timer.Stop("SyncGraphToCode"));
         }
 
         // =========================================================

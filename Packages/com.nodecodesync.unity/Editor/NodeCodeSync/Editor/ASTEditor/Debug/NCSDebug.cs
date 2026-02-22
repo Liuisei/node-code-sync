@@ -6,13 +6,24 @@ namespace NodeCodeSync.Editor.ASTEditor
     {
         const bool DebugMode = true;
 
-        StringBuilder logBuilder = new StringBuilder();
+        readonly StringBuilder _logBuilder = new StringBuilder();
         const string LogPrefix = "[NCS]";
+
+        readonly string _logModifire;
+
+        public NCSDebug(string logmodifier)
+        {
+            if (DebugMode)
+            {
+                _logModifire = logmodifier;
+            }
+        }
+
         public void Log(string message)
         {
             if (DebugMode)
             {
-                logBuilder.AppendLine($"{LogPrefix}[LOG] {message}");
+                _logBuilder.AppendLine($"{LogPrefix} [LOG] {_logModifire} {message}");
             }
         }
 
@@ -20,7 +31,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         {
             if (DebugMode)
             {
-                logBuilder.AppendLine($"{LogPrefix}[WARNING] {message}");
+                _logBuilder.AppendLine($"{LogPrefix} [WARNING] {_logModifire} {message}");
             }
         }
 
@@ -28,15 +39,15 @@ namespace NodeCodeSync.Editor.ASTEditor
         {
             if (DebugMode)
             {
-                logBuilder.AppendLine($"{LogPrefix}[ERROR] {message}");
+                _logBuilder.AppendLine($"{LogPrefix} [ERROR] {_logModifire} {message}");
             }
         }
         public string PrintLog()
         {
             if (DebugMode)
             {
-                var result = logBuilder.ToString();
-                logBuilder.Clear();
+                var result = _logBuilder.ToString();
+                _logBuilder.Clear();
                 return result;
             }
             else

@@ -7,10 +7,20 @@ namespace NodeCodeSync.Editor.ASTEditor
     {
         const bool DebugMode = true;
 
-        StringBuilder logBuilder = new StringBuilder();
+        readonly StringBuilder logBuilder = new();
         const string LogPrefix = "[NCS]";
 
+        readonly string _logModifire = "";
+
         Stopwatch stopwatch = new Stopwatch();
+
+        public NCSTimer(string logModifier)
+        {
+            if (DebugMode)
+            {
+                _logModifire = logModifier;
+            }
+        }
 
         public void Start()
         {
@@ -24,7 +34,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         {
             if (DebugMode)
             {
-                logBuilder.AppendLine($"{LogPrefix}[TIMER] {label}: {stopwatch.ElapsedMilliseconds}ms");
+                logBuilder.AppendLine($"{LogPrefix}[TIMER] {_logModifire} {label}: {stopwatch.ElapsedMilliseconds}ms");
             }
         }
 
@@ -32,7 +42,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         {
             if (!DebugMode) return string.Empty;
             stopwatch.Stop();
-            logBuilder.AppendLine($"{LogPrefix}[TIMER] {label}: {stopwatch.ElapsedMilliseconds}ms");
+            logBuilder.AppendLine($"{LogPrefix}[TIMER] {_logModifire} {label}: {stopwatch.ElapsedMilliseconds}ms");
             return logBuilder.ToString();
         }
     }

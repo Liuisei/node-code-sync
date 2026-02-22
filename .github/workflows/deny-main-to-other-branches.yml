@@ -1,0 +1,17 @@
+name: Deny main -> other branches
+
+on:
+  pull_request: {}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Block PRs from main into non-main branches
+        run: |
+          echo "base=${{ github.base_ref }} head=${{ github.head_ref }}"
+          if [ "${{ github.head_ref }}" = "main" ] && [ "${{ github.base_ref }}" != "main" ]; then
+            echo "❌ PRs from 'main' into other branches are not allowed."
+            exit 1
+          fi
+          echo "✅ OK"

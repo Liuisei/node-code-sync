@@ -186,7 +186,7 @@ namespace NodeCodeSync.Editor.ASTEditor
         public void SyncGraphToCode()
         {
             AstNode[] roots = GetRootNodes();
-            string code = NodeToCodeConverter.NodeMetasToCSharp(roots, this, true);
+            string code = NodeToCodeConverter.NodeMetasToCSharp(roots, this);
             NodeCodeDataEventBus.Instance.UpdateNode(code);
         }
 
